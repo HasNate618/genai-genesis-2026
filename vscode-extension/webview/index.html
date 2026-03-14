@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'none'; style-src {{CSP_SOURCE}} 'unsafe-inline'; script-src {{CSP_SOURCE}};"
+  />
+  <title>AgenticArmy</title>
+  <link rel="stylesheet" href="{{CSS_URI}}" />
+</head>
+<body>
+
+  <!-- ── Header ─────────────────────────────────────────────── -->
+  <header class="app-header">
+    <div class="logo">
+      <div class="logo-icon">⚡</div>
+      <div>
+        <div class="logo-text">AgenticArmy</div>
+        <div class="logo-sub">Multi-Agent Orchestration</div>
+      </div>
+    </div>
+    <div id="backend-status" class="offline"><span class="status-dot"></span><span id="backend-status-text">Offline</span></div>
+  </header>
+
+  <!-- ── Tab bar ────────────────────────────────────────────── -->
+  <nav class="tab-bar">
+    <button class="tab-btn active" data-tab="settings" id="tab-settings">⚙ Settings</button>
+    <button class="tab-btn" data-tab="goal"     id="tab-goal">Goal</button>
+    <button class="tab-btn" data-tab="approval" id="tab-approval">Plan</button>
+    <button class="tab-btn" data-tab="agents"   id="tab-agents">Agents</button>
+    <button class="tab-btn" data-tab="logs"     id="tab-logs">Logs</button>
+  </nav>
+
+  <!-- ── Notification ───────────────────────────────────────── -->
+  <div id="notification" class="notification hidden"></div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       SETTINGS PANEL
+  ═══════════════════════════════════════════════════════════════ -->
+  <section id="panel-settings" class="panel active">
+
+    <div class="section-title">API Keys</div>
+
+    <!-- Gemini row -->
+    <div class="field-row mb-8">
+      <div class="field-label"><span class="req">*</span>&nbsp;Gemini</div>
+      <div class="field-input-wrap">
+        <input type="password" id="gemini-key" placeholder="AIza..." autocomplete="off" spellcheck="false" />
+        <button class="btn-icon" id="toggle-gemini" title="Show">👁</button>
+      </div>
+    </div>
+
+    <!-- Moorcheh row -->
+    <div class="field-row mb-8">
+      <div class="field-label">Moorcheh</div>
+      <div class="field-input-wrap">
+        <input type="password" id="moorcheh-key" placeholder="mch_..." autocomplete="off" spellcheck="false" />
+        <button class="btn-icon" id="toggle-moorcheh" title="Show">👁</button>
+      </div>
+    </div>
+
+    <hr class="divider" />
+
+    <!-- Scope segmented control (like Global/Workspace in reference) -->
+    <div class="field-row">
+      <div class="field-label">Scope</div>
+      <div class="seg-control" id="scope-control">
+        <button class="seg-btn active" data-scope="global">Global</button>
+        <button class="seg-btn"        data-scope="workspace">Workspace</button>
+      </div>
+    </div>
+
+    <div class="action-row mt-8">
+      <button class="btn btn-primary btn-full" id="save-keys-btn">Save Keys</button>
+    </div>
+
+    <!-- Saved keys section -->
+    <div id="saved-keys-section" class="hidden" style="margin-top: 20px;">
+      <div class="section-title">Saved Keys</div>
+      <div id="saved-keys-list"></div>
+    </div>
+
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════
+       GOAL PANEL
+  ═══════════════════════════════════════════════════════════════ -->
+  <section id="panel-goal" class="panel">
+
+    <div class="section-title">Define Goal</div>
+
+    <div class="field-row" style="align-items:flex-start">
+      <div class="field-label" style="padding-top:6px"><span class="req">*</span>&nbsp;Goal</div>
+      <textarea id="goal-input"
+        placeholder="e.g. Build a REST API for user authentication with JWT tokens..."
+        style="flex:1"></textarea>
+    </div>
+
+    <hr class="divider" />
+
+    <!-- Coder count -->
+    <div class="field-row">
+      <div class="field-label">Coders</div>
+      <div class="slider-row" style="flex:1">
+        <input type="range" id="coder-count" class="slider" min="1" max="8" value="2" style="flex:1" />
+        <span class="slider-val" id="coder-count-display">2</span>
+      </div>
+    </div>
+
+    <button class="btn btn-primary btn-full mt-8" id="launch-btn">
+      🚀 Launch Agents
+    </button>
+
+    <div id="job-info" class="hidden">
+      <div class="info-box">
+        <span style="color:var(--text-muted);font-size:10.5px">JOB</span>
+        <code id="job-id-display"></code>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════
+       PLAN APPROVAL PANEL
+  ═══════════════════════════════════════════════════════════════ -->
+  <section id="panel-approval" class="panel">
+
+    <div class="section-title">Plan Review</div>
+
+    <!-- Waiting state -->
+    <div id="approval-waiting" class="empty-state">
+      <div class="empty-icon">⏳</div>
+      <p>Waiting for Planner Agent<br/>to generate a plan...</p>
+    </div>
+
+    <!-- Plan ready -->
+    <div id="approval-content" class="hidden">
+      <div class="plan-box" id="plan-text"></div>
+      <div class="action-row center mt-8">
+        <button class="btn btn-success" id="approve-btn">✅ Approve</button>
+        <button class="btn btn-danger"  id="deny-btn">❌ Revise</button>
+      </div>
+    </div>
+
+    <!-- Approved -->
+    <div id="approval-done" class="hidden">
+      <div class="status-done">✓ Plan approved — executing!</div>
+    </div>
+
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════
+       AGENTS PANEL
+  ═══════════════════════════════════════════════════════════════ -->
+  <section id="panel-agents" class="panel">
+
+    <div class="section-title">Pipeline Status</div>
+
+    <div class="agent-grid" id="agent-grid">
+
+      <div class="agent-card" id="agent-planner">
+        <div class="agent-icon">🧠</div>
+        <div class="agent-info">
+          <div class="agent-name">Planner</div>
+          <div class="agent-role">Generates implementation plan</div>
+        </div>
+        <span class="badge badge-idle">Idle</span>
+      </div>
+
+      <div class="agent-card" id="agent-coordinator">
+        <div class="agent-icon">🎯</div>
+        <div class="agent-info">
+          <div class="agent-name">Coordinator</div>
+          <div class="agent-role">Splits &amp; assigns tasks</div>
+        </div>
+        <span class="badge badge-idle">Idle</span>
+      </div>
+
+      <div class="agent-card" id="agent-coder">
+        <div class="agent-icon">💻</div>
+        <div class="agent-info">
+          <div class="agent-name">Coders</div>
+          <div class="agent-role">Parallel code generation</div>
+        </div>
+        <span class="badge badge-idle">Idle</span>
+      </div>
+
+      <div class="agent-card" id="agent-merger">
+        <div class="agent-icon">🔀</div>
+        <div class="agent-info">
+          <div class="agent-name">Merger</div>
+          <div class="agent-role">Combines agent outputs</div>
+        </div>
+        <span class="badge badge-idle">Idle</span>
+      </div>
+
+      <div class="agent-card" id="agent-qa">
+        <div class="agent-icon">🧪</div>
+        <div class="agent-info">
+          <div class="agent-name">QA Tester</div>
+          <div class="agent-role">Validates final output</div>
+        </div>
+        <span class="badge badge-idle">Idle</span>
+      </div>
+
+    </div>
+
+    <!-- Pipeline status bar — like Config tab row in reference image -->
+    <div class="section-title" style="margin-top:4px">Stage</div>
+    <div class="pipeline-bar">
+      <span class="pipeline-label">Current</span>
+      <span id="pipeline-stage">No active run</span>
+    </div>
+
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════
+       LOGS PANEL
+  ═══════════════════════════════════════════════════════════════ -->
+  <section id="panel-logs" class="panel">
+
+    <div class="log-controls">
+      <div class="section-title" style="margin:0">Console</div>
+      <span id="log-count" class="log-count" style="margin-left:6px"></span>
+      <button class="btn btn-ghost btn-sm" id="clear-logs-btn">Clear</button>
+      <button class="btn btn-ghost btn-sm" id="scroll-bottom-btn">↓</button>
+    </div>
+
+    <pre id="log-output" class="log-console"><span class="log-placeholder">Logs will appear when a pipeline is running...</span></pre>
+
+  </section>
+
+  <script src="{{JS_URI}}"></script>
+</body>
+</html>

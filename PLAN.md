@@ -17,7 +17,7 @@ Multi-agent collaboration system with human-in-the-loop approval workflow for au
    - Agentic pipeline execution
    - Tool exposure
 
-3. **Agent Orchestration** (Mastra)
+3. **Agent Orchestration** (Railword)
    - Planning Agent
    - Coordinator Agent
    - Coder Agents (multiple)
@@ -110,7 +110,7 @@ Multi-agent collaboration system with human-in-the-loop approval workflow for au
 
 ### Phase 1: Core Infrastructure
 - FastAPI setup
-- Basic Mastra agent definitions
+- Basic Railwork agent definitions
 - VSCode extension skeleton
 
 ### Phase 2: Agent Communication
