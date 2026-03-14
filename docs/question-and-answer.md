@@ -74,7 +74,7 @@ Answer: The approval UI should present the planning agent's proposed plan. If th
 ## Data & Storage
 15. Where should workflow history and agent outputs be stored? (local files, database, both?)
 
-Answer: Workflow history and agent outputs should be stored via the moorcheh python sdk. If moorcheh does not fit the tas, SQLite can be used instead.
+Answer: Workflow history and agent outputs should be stored via the moorcheh python sdk. If moorcheh does not fit the task, SQLite can be used instead.
 
 16. Should there be a notion of "projects" or "workspaces" to organize multiple workflows?
 

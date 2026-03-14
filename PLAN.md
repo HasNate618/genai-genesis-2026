@@ -119,7 +119,13 @@ Multi-agent collaboration system with human-in-the-loop approval workflow for au
 - Basic task distribution
 
 ### Phase 3: Semantic Memory
-- Vector store integration
+- Vector store integration (Moorcheh)
+  - **Status: COMPLETE** ✅
+  - Implemented: vector-memory scaffold with deterministic record schema, embedding provider (mock + OpenAI-compatible), **Moorcheh Python SDK client wrapper**, store façade, context reader/writer, conflict compensator, telemetry, FastAPI debug endpoints, and comprehensive unit tests.
+  - All 7 tests pass locally.
+  - Live integration test (2026-03-14): namespace provision ✓, vector upload ✓, search ✓, health check ✓
+  - Key change: Switched from custom REST client to official `moorcheh-sdk` for automatic auth, retry logic, and type safety.
+  - Docs updated: docs/Moorcheh.md now describes SDK usage, live test results, and architecture diagram.
 - Conflict detection logic
 - File tracking
 
@@ -132,3 +138,11 @@ Multi-agent collaboration system with human-in-the-loop approval workflow for au
 - End-to-end workflows
 - Conflict resolution improvements
 - Performance optimization
+
+Live Moorcheh integration test results (2026-03-14):
+- Initial REST client attempts: namespace provision ✓, but vector upload ✗ (401/403 auth errors)
+- Switched to official `moorcheh-sdk`: all operations ✓ (list, provision, upload, search, health)
+- 3 test vectors uploaded successfully with metadata (workflow_id, record_type, agent_id)
+- Search returned results with correct metadata preservation
+- Decision: SDK integration complete. Future work: wire context writer/reader into orchestration runtime.
+
