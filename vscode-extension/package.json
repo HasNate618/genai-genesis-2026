@@ -1,0 +1,42 @@
+{
+  "name": "agentic-army",
+  "displayName": "AgenticArmy",
+  "description": "Multi-agent collaboration workflow for AI-assisted development",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:agentic-army.start"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "agentic-army.start",
+        "title": "Start AgenticArmy Workflow"
+      },
+      {
+        "command": "agentic-army.createProject",
+        "title": "Create New Project"
+      },
+      {
+        "command": "agentic-army.viewWorkflow",
+        "title": "View Current Workflow"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
+  }
+}
