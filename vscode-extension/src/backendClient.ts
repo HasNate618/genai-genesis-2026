@@ -8,10 +8,14 @@ export interface RunConfig {
 }
 
 export interface JobStatus {
-  status: 'pending' | 'planning' | 'awaiting_approval' | 'coordinating' | 'coding' | 'merging' | 'qa' | 'done' | 'failed';
+  status: string;
   logs: string[];
-  plan?: string;
   agentStates: Record<string, 'idle' | 'running' | 'done' | 'error'>;
+}
+
+export interface PlanStatus {
+  status: string;
+  plan?: string;
 }
 
 export class BackendClient {
@@ -19,11 +23,11 @@ export class BackendClient {
     const port = vscode.workspace
       .getConfiguration('agenticArmy')
       .get<number>('backendPort', 8000);
-    return `http://localhost:${port}`;
+    return `http://localhost:${port}/api/v1`;
   }
 
-  async startRun(config: RunConfig): Promise<{ job_id: string }> {
-    const response = await fetch(`${this.baseUrl}/run`, {
+  async startJob(config: RunConfig): Promise<{ job_id: string }> {
+    const response = await fetch(`${this.baseUrl}/jobs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -42,8 +46,28 @@ export class BackendClient {
     return response.json() as Promise<{ job_id: string }>;
   }
 
+  async getPlan(jobId: string): Promise<PlanStatus> {
+    const response = await fetch(`${this.baseUrl}/jobs/${jobId}/plan`);
+    if (!response.ok) {
+      throw new Error(`Plan fetch failed: ${response.status}`);
+    }
+    return response.json() as Promise<PlanStatus>;
+  }
+
+  async reviewPlan(jobId: string, approved: boolean, feedback: string = ""): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/jobs/${jobId}/plan/review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved, feedback }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Plan review failed: ${response.status}`);
+    }
+  }
+
   async getStatus(jobId: string): Promise<JobStatus> {
-    const response = await fetch(`${this.baseUrl}/status/${jobId}`);
+    const response = await fetch(`${this.baseUrl}/jobs/${jobId}/status`);
 
     if (!response.ok) {
       throw new Error(`Status fetch failed: ${response.status}`);
@@ -52,21 +76,22 @@ export class BackendClient {
     return response.json() as Promise<JobStatus>;
   }
 
-  async sendApproval(jobId: string, approved: boolean): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/approve/${jobId}`, {
+  async reviewResult(jobId: string, approved: boolean, feedback: string = ""): Promise<void> {
+    const response = await fetch(`${this.baseUrl}/jobs/${jobId}/result/review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ approved }),
+      body: JSON.stringify({ approved, feedback }),
     });
 
     if (!response.ok) {
-      throw new Error(`Approval failed: ${response.status}`);
+      throw new Error(`Result review failed: ${response.status}`);
     }
   }
 
   async ping(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/health`, {
+      // Use root health check or namespaced health check
+      const response = await fetch(this.baseUrl.replace('/api/v1', '/health'), {
         signal: AbortSignal.timeout(2000),
       });
       return response.ok;

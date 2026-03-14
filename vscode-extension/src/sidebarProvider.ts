@@ -87,7 +87,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           return;
         }
         try {
-          const { job_id } = await this.backendClient.startRun({
+          const { job_id } = await this.backendClient.startJob({
             goal: msg.goal,
             coderCount: msg.coderCount,
             geminiKey: keys.gemini,
@@ -102,14 +102,24 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         break;
       }
 
-      case 'approve':
-      case 'deny':
+      case 'reviewPlan':
         if (this.currentJobId) {
-          await this.backendClient.sendApproval(this.currentJobId, msg.command === 'approve');
+          await this.backendClient.reviewPlan(this.currentJobId, msg.approved, msg.feedback);
           post({
             command: 'notification',
             type: 'success',
-            text: msg.command === 'approve' ? 'Plan approved ✓' : 'Revision requested',
+            text: msg.approved ? 'Plan approved ✓' : 'Feedback sent',
+          });
+        }
+        break;
+
+      case 'reviewResult':
+        if (this.currentJobId) {
+          await this.backendClient.reviewResult(this.currentJobId, msg.approved, msg.feedback);
+          post({
+            command: 'notification',
+            type: 'success',
+            text: msg.approved ? 'PR approved ✓' : 'Feedback sent',
           });
         }
         break;
@@ -124,11 +134,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private startPolling(jobId: string): void {
     this.stopPolling();
+    let lastStatus = '';
     this.pollInterval = setInterval(async () => {
       try {
-        const status = await this.backendClient.getStatus(jobId);
-        this.view?.webview.postMessage({ command: 'statusUpdate', status });
-        if (status.status === 'done' || status.status === 'failed') {
+        const statusObj = await this.backendClient.getStatus(jobId);
+        let planPayload = undefined;
+        if (statusObj.status === 'awaiting_plan_approval' && lastStatus !== 'awaiting_plan_approval') {
+          const planData = await this.backendClient.getPlan(jobId);
+          planPayload = planData.plan;
+        }
+        lastStatus = statusObj.status;
+
+        this.view?.webview.postMessage({ command: 'statusUpdate', status: statusObj, plan: planPayload });
+        if (statusObj.status === 'done' || statusObj.status === 'failed') {
           this.stopPolling();
         }
       } catch { /* silent */ }

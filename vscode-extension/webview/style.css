@@ -325,6 +325,13 @@ textarea {
 }
 .btn-danger:hover { background: rgba(255,69,58,0.2); }
 
+.btn-feedback {
+  background: rgba(255, 159, 10, 0.12);
+  border: 1px solid rgba(255, 159, 10, 0.6);
+  color: #ff9f0a;
+}
+.btn-feedback:hover { background: rgba(255, 159, 10, 0.22); border-color: #ff9f0a; }
+
 .btn-icon {
   padding: 6px 9px;
   background: var(--bg-button);
@@ -400,7 +407,7 @@ textarea {
 /* ── Plan box ────────────────────────────────────────────────────── */
 .plan-box {
   background: var(--bg-input);
-  border: 1px solid var(--border);
+  border: 2px solid var(--border-focus);
   border-radius: var(--radius-sm);
   padding: 12px;
   font-size: 12px;
@@ -409,6 +416,12 @@ textarea {
   max-height: 260px;
   overflow-y: auto;
   color: var(--text);
+}
+
+.feedback-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 /* ── Empty state ─────────────────────────────────────────────────── */
