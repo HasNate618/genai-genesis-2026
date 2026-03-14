@@ -1,0 +1,107 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv
+venv/
+ENV/
+env/
+.env.local
+.env.*.local
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.prod
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+.vim/
+.project
+.pydevproject
+.settings/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.hypothesis/
+.tox/
+.cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Moorcheh and API keys (secrets)
+*.key
+*.pem
+*.pub
+secrets/
+.secrets
+
+# Node (if present)
+node_modules/
+package-lock.json
+yarn.lock
+
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+*.localized
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+.~*
+
+# Logs
+*.log
+logs/
+
+# Database files (if used)
+*.db
+*.sqlite
+*.sqlite3
+
+# OS-specific
+*.egg-info
+.installed.cfg
+pip-log.txt

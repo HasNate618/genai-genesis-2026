@@ -31,22 +31,23 @@ Important boundary:
 
 - `backend/main.py`
   - Creates FastAPI app.
-  - Mounts the memory router.
+  - Mounts the architecture-aligned `/api/v1` router.
 
-- `backend/api/routes.py`
-  - Exposes operational endpoints under `/memory`:
-    - `POST /memory/provision`
-    - `GET /memory/health`
-    - `GET /memory/config`
-    - `GET /memory/metrics`
-    - `POST /memory/search`
-    - `POST /memory/write-debug`
+- `backend/api/v1.py`
+  - Exposes contract endpoints under `/api/v1`:
+    - `GET /api/v1/health`
+    - `POST /api/v1/jobs`
+    - `GET /api/v1/jobs/{job_id}/plan`
+    - `POST /api/v1/jobs/{job_id}/plan/review`
+    - `GET /api/v1/jobs/{job_id}/status`
+    - `POST /api/v1/jobs/{job_id}/result/review`
+  - Uses an in-memory job runtime with background pipeline execution and HITL gates.
 
 ## Configuration
 
 - `backend/config.py`
   - `Settings.from_env()` loads and validates env vars.
-  - Enforces required `MOORCHEH_API_KEY`.
+  - Supports per-job `moorcheh_api_key` override from `/api/v1/jobs` payload.
   - Enforces `EMBEDDING_API_KEY` when provider is not `mock`.
   - Enforces numeric bounds for vector dim, conflict threshold, etc.
   - Provides safe redacted config for diagnostics.
@@ -241,7 +242,7 @@ export MOORCHEH_BASE_URL="https://api.moorcheh.ai/v1"
 export MOORCHEH_VECTOR_NAMESPACE="workflow-context-vectors"
 export MOORCHEH_VECTOR_DIMENSION="1536"
 
-export EMBEDDING_PROVIDER="openai"  # or "mock" for tests
+export EMBEDDING_PROVIDER="mock"    # default; use "openai" with EMBEDDING_API_KEY for real embeddings
 export EMBEDDING_API_KEY="sk_<your-key-here>"
 export EMBEDDING_MODEL="text-embedding-3-small"
 export EMBEDDING_BASE_URL="https://api.openai.com/v1/embeddings"
@@ -259,60 +260,84 @@ set -o allexport && source ./.env && set +o allexport
 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-## 4) Provision (or verify) vector namespace
+### 4) Verify backend health
 
 ```bash
-curl -X POST http://127.0.0.1:8000/memory/provision
+curl http://127.0.0.1:8000/api/v1/health
 ```
 
-Expected behavior:
+Expected:
 
-- Creates namespace if missing (uses Moorcheh SDK).
-- Returns `exists` if already present.
-- Throws error if existing namespace dimension mismatches config.
-
-### 5) Check health/config/telemetry
-
-```bash
-curl http://127.0.0.1:8000/memory/health
-curl http://127.0.0.1:8000/memory/config
-curl http://127.0.0.1:8000/memory/metrics
+```json
+{ "status": "ok", "service": "agentic-army-v1" }
 ```
 
-### 6) Write a sample context event
+### 5) Create a job (includes Moorcheh key)
 
 ```bash
-curl -X POST http://127.0.0.1:8000/memory/write-debug \
+curl -X POST http://127.0.0.1:8000/api/v1/jobs \
   -H "Content-Type: application/json" \
   -d '{
-    "workflow_id": "wf-demo",
-    "run_id": "run-1",
-    "record_type": "plan",
-    "stage": "planning",
-    "status": "done",
-    "raw_text": "Planner approved split across auth and billing.",
-    "agent_id": "planner",
-    "event_seq": 0,
-    "file_paths": ["src/auth.py", "src/billing.py"]
+    "goal": "Implement conflict-aware parallel coding",
+    "coder_count": 2,
+    "gemini_key": "optional-placeholder",
+    "moorcheh_key": "mc_<your-key-here>"
   }'
 ```
 
-### 7) Search context semantically
+Response:
 
-```bash
-curl -X POST http://127.0.0.1:8000/memory/search \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "previous planning decisions for auth files",
-    "top_k": 10,
-    "threshold": 0.2,
-    "metadata_filters": {
-      "workflow_id": "wf-demo"
-    }
-  }'
+```json
+{ "job_id": "<uuid>" }
 ```
 
-This query is automatically embedded and searched against stored vectors using the Moorcheh SDK.
+### 6) Poll job status
+
+```bash
+curl http://127.0.0.1:8000/api/v1/jobs/<job_id>/status
+```
+
+Returned shape:
+
+```json
+{
+  "status": "planning",
+  "logs": ["[10:00:00] Planning phase started."],
+  "agentStates": {
+    "planner": "running",
+    "conflict_manager": "idle",
+    "coder": "idle",
+    "verification": "idle"
+  }
+}
+```
+
+### 7) Review generated plan when status is `awaiting_plan_approval`
+
+```bash
+curl http://127.0.0.1:8000/api/v1/jobs/<job_id>/plan
+```
+
+Approve or reject:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/jobs/<job_id>/plan/review \
+  -H "Content-Type: application/json" \
+  -d '{"approved": true, "feedback": "Proceed"}'
+```
+
+### 8) Final result review when status is `review_ready`
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/jobs/<job_id>/result/review \
+  -H "Content-Type: application/json" \
+  -d '{"approved": true, "feedback": "Merge approved"}'
+```
+
+### 9) Deprecation notice
+
+`/memory/*` endpoints are deprecated from the public API surface in this branch.  
+Use `/api/v1/*` for extension/backend integration.
 
 
 ## Programmatic Usage in Your Orchestrator
@@ -414,7 +439,7 @@ Example from 2026-03-14 live test:
 ✓ Metadata: workflow_id, record_type, agent_id preserved
 ```
 
-Tests pass for config, schema, conflict compensation, memory loop, and async context contract (7 passed).
+Tests pass for config, schema, conflict compensation, memory loop, async context contract, and `/api/v1` job contract (11 passed).
 
 
 ## Implementation Details
@@ -430,28 +455,30 @@ The implementation switched from custom REST client to the official `moorcheh-sd
 ### Architecture
 
 ```
-┌─ FastAPI routes ─────────┐
-│ /memory/provision         │
-│ /memory/write-debug       │
-│ /memory/search            │
-│ /memory/health            │
-└──────────┬────────────────┘
+┌─ FastAPI routes (`/api/v1`) ──────────────────────────┐
+│ GET  /health                                           │
+│ POST /jobs                                             │
+│ GET  /jobs/{job_id}/plan                               │
+│ POST /jobs/{job_id}/plan/review                        │
+│ GET  /jobs/{job_id}/status                             │
+│ POST /jobs/{job_id}/result/review                      │
+└──────────┬──────────────────────────────────────────────┘
            │
-┌──────────▼─────────────────────────────────────────┐
-│ MoorchehVectorStore (facade)                       │
-│ - embedding provider (mock | openai)               │
-│ - moorcheh client (SDK wrapper)                    │
-│ - telemetry                                        │
-└──────────┬─────────────────────────────────────────┘
+┌──────────▼─────────────────────────────────────────────┐
+│ JobRuntime state machine                              │
+│ - initializing -> planning -> awaiting_plan_approval  │
+│ - coordinating -> coding -> verifying -> review_ready │
+│ - done | failed                                       │
+│ - HITL gates via asyncio.Event                        │
+└──────────┬─────────────────────────────────────────────┘
            │
-┌──────────▼──────────────────────────────────────┐
-│ moorcheh_client.py (SDK wrapper)                │
-│ - list_namespaces()                             │
-│ - upload_vectors()                              │
-│ - search_vectors()                              │
-│ - generate_answer()                             │
-│ - ensure_vector_namespace()                     │
-└──────────┬──────────────────────────────────────┘
+┌──────────▼─────────────────────────────────────────────┐
+│ Moorcheh memory stack                                 │
+│ - WorkflowContextReader / WorkflowContextWriter       │
+│ - ConflictCompensator                                 │
+│ - MoorchehVectorStore                                 │
+│ - moorcheh_client.py (SDK wrapper)                    │
+└──────────┬─────────────────────────────────────────────┘
            │
 ┌──────────▼──────────────────────────────────────┐
 │ moorcheh-sdk (Official Python SDK)              │
@@ -474,4 +501,3 @@ The current code provides memory infrastructure and diagnostics. To make it full
 - async payload handoff to `build_async_agent_context(...)`
 
 Once those calls are connected to your runtime state machine, the Moorcheh memory loop is fully operational.
-

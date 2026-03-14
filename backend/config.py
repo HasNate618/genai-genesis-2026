@@ -65,16 +65,24 @@ class Settings:
     max_context_window: int
 
     @classmethod
-    def from_env(cls) -> "Settings":
-        provider = _env("EMBEDDING_PROVIDER", default="openai").lower()
-        embedding_api_key = _env("EMBEDDING_API_KEY", default="")
-        if provider != "mock" and not embedding_api_key:
+    def from_env(
+        cls,
+        *,
+        moorcheh_api_key: str | None = None,
+        embedding_provider: str | None = None,
+        embedding_api_key: str | None = None,
+    ) -> "Settings":
+        provider = (embedding_provider or _env("EMBEDDING_PROVIDER", default="mock")).lower()
+        resolved_embedding_key = (
+            embedding_api_key if embedding_api_key is not None else _env("EMBEDDING_API_KEY", default="")
+        )
+        if provider != "mock" and not resolved_embedding_key:
             raise ConfigError(
                 "EMBEDDING_API_KEY is required when EMBEDDING_PROVIDER is not 'mock'."
             )
 
         return cls(
-            moorcheh_api_key=_env("MOORCHEH_API_KEY", required=True),
+            moorcheh_api_key=moorcheh_api_key or _env("MOORCHEH_API_KEY", required=True),
             moorcheh_base_url=_env("MOORCHEH_BASE_URL", default=DEFAULT_MOORCHEH_BASE_URL),
             moorcheh_vector_namespace=_env(
                 "MOORCHEH_VECTOR_NAMESPACE", default=DEFAULT_VECTOR_NAMESPACE
@@ -84,7 +92,7 @@ class Settings:
             ),
             embedding_provider=provider,
             embedding_model=_env("EMBEDDING_MODEL", default="text-embedding-3-small"),
-            embedding_api_key=embedding_api_key,
+            embedding_api_key=resolved_embedding_key,
             embedding_base_url=_env("EMBEDDING_BASE_URL", default=""),
             embedding_batch_size=_env_int("EMBEDDING_BATCH_SIZE", default=32),
             retrieval_top_k=_env_int("CONTEXT_RETRIEVAL_TOP_K", default=12),
@@ -119,4 +127,3 @@ def get_settings() -> Settings:
 def reset_settings_cache() -> None:
     """Clear cached settings, primarily for tests."""
     get_settings.cache_clear()
-

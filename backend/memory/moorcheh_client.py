@@ -149,6 +149,3 @@ class MoorchehClient:
             return {"status": "ok", "namespace_count": len(namespaces)}
         except Exception as exc:
             raise MoorchehAPIError(f"Health check failed: {exc}") from exc
-
-        raise MoorchehAPIError(f"{method} {path} failed for unknown reason.")
-
