@@ -4,7 +4,8 @@ const vscode = acquireVsCodeApi();
 // ── State ─────────────────────────────────────────────────────────
 let currentJobId = null;
 let logEntries = [];
-let approvalPending = false;
+let pendingHitL1 = false;
+let pendingHitL2 = false;
 let isGeminiSet = false;
 let isMoorchehSet = false;
 
@@ -13,31 +14,34 @@ const $ = (id) => document.getElementById(id);
 
 // Tabs
 const tabBtns = document.querySelectorAll('.tab-btn');
-const panels  = document.querySelectorAll('.panel');
+const panels = document.querySelectorAll('.panel');
 
 // Settings
-const geminiInput    = $('gemini-key');
-const moorchehInput  = $('moorcheh-key');
+const geminiInput = $('gemini-key');
+const moorchehInput = $('moorcheh-key');
 const savedKeysSection = $('saved-keys-section');
-const savedKeysList    = $('saved-keys-list');
+const savedKeysList = $('saved-keys-list');
 
 // Goal
-const goalInput         = $('goal-input');
-const coderSlider       = $('coder-count');
-const coderDisplay      = $('coder-count-display');
-const launchBtn         = $('launch-btn');
-const jobInfo           = $('job-info');
-const jobIdDisplay      = $('job-id-display');
+const goalInput = $('goal-input');
+const coderSlider = $('coder-count');
+const coderDisplay = $('coder-count-display');
+const launchBtn = $('launch-btn');
+const jobInfo = $('job-info');
+const jobIdDisplay = $('job-id-display');
 
-// Approval
-const approvalWaiting  = $('approval-waiting');
-const approvalContent  = $('approval-content');
-const approvalDone     = $('approval-done');
-const planText         = $('plan-text');
+// Review Panel
+const reviewWaiting = $('review-waiting');
+const planReviewContent = $('plan-review-content');
+const resultReviewContent = $('result-review-content');
+const reviewDone = $('review-done');
+const planText = $('plan-text');
+const planFeedback = $('plan-feedback');
+const resultFeedback = $('result-feedback');
 
 // Log
 const logOutput = $('log-output');
-const logCount  = $('log-count');
+const logCount = $('log-count');
 
 // ── Tab switching ─────────────────────────────────────────────────
 function switchTab(tabId) {
@@ -79,12 +83,12 @@ document.querySelectorAll('.seg-btn').forEach(btn => {
 $('save-keys-btn').addEventListener('click', () => {
   const g = geminiInput.value.trim();
   const m = moorchehInput.value.trim();
-  
+
   // If nothing was entered, just do nothing (no popup, no save)
   if (!g && !m) return;
-  
+
   vscode.postMessage({ command: 'saveKeys', geminiKey: g, moorchehKey: m });
-  
+
   // Clear inputs after save so they only show in saved keys list
   if (g) geminiInput.value = '';
   if (m) moorchehInput.value = '';
@@ -93,16 +97,16 @@ $('save-keys-btn').addEventListener('click', () => {
 function updateSavedKeysList(geminiSet, moorchehSet) {
   isGeminiSet = geminiSet;
   isMoorchehSet = moorchehSet;
-  
+
   savedKeysList.innerHTML = '';
-  
+
   if (!geminiSet && !moorchehSet) {
     savedKeysSection.classList.add('hidden');
     return;
   }
-  
+
   savedKeysSection.classList.remove('hidden');
-  
+
   if (geminiSet) {
     savedKeysList.appendChild(createKeyItem('Gemini', 'gemini'));
   }
@@ -133,7 +137,7 @@ launchBtn.addEventListener('click', () => {
   const goal = goalInput.value.trim();
   if (!goal) { showNotification('Please enter a goal.', 'error'); return; }
   launchBtn.disabled = true;
-  launchBtn.textContent = '⏳ Launching…';
+  launchBtn.textContent = 'Launching…';
   vscode.postMessage({
     command: 'startRun',
     goal,
@@ -141,21 +145,39 @@ launchBtn.addEventListener('click', () => {
   });
 });
 
-// ── Approval ──────────────────────────────────────────────────────
-$('approve-btn').addEventListener('click', () => {
-  vscode.postMessage({ command: 'approve' });
-  approvalContent.classList.add('hidden');
-  approvalDone.classList.remove('hidden');
-  approvalPending = false;
+// ── Review (HitL Gates) ───────────────────────────────────────────
+// Plan Review (HitL 1)
+$('approve-plan-btn').addEventListener('click', () => {
+  vscode.postMessage({ command: 'reviewPlan', approved: true, feedback: planFeedback.value });
+  planReviewContent.classList.add('hidden');
+  reviewDone.classList.remove('hidden');
+  pendingHitL1 = false;
 });
 
-$('deny-btn').addEventListener('click', () => {
-  vscode.postMessage({ command: 'deny' });
-  approvalContent.classList.add('hidden');
-  approvalWaiting.classList.remove('hidden');
-  approvalPending = false;
+$('deny-plan-btn').addEventListener('click', () => {
+  vscode.postMessage({ command: 'reviewPlan', approved: false, feedback: planFeedback.value });
+  planReviewContent.classList.add('hidden');
+  reviewWaiting.classList.remove('hidden');
+  pendingHitL1 = false;
   appendLog('⟳ Plan revision requested…', 'warn');
 });
+
+// Result Review (HitL 2)
+$('approve-result-btn').addEventListener('click', () => {
+  vscode.postMessage({ command: 'reviewResult', approved: true, feedback: resultFeedback.value });
+  resultReviewContent.classList.add('hidden');
+  reviewDone.classList.remove('hidden');
+  pendingHitL2 = false;
+});
+
+$('deny-result-btn').addEventListener('click', () => {
+  vscode.postMessage({ command: 'reviewResult', approved: false, feedback: resultFeedback.value });
+  resultReviewContent.classList.add('hidden');
+  reviewWaiting.classList.remove('hidden');
+  pendingHitL2 = false;
+  appendLog('⟳ Result revision requested…', 'warn');
+});
+
 
 // ── Log console ───────────────────────────────────────────────────
 function appendLog(message, level = 'info') {
@@ -178,7 +200,7 @@ function appendLog(message, level = 'info') {
 }
 
 function escHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 $('clear-logs-btn').addEventListener('click', () => {
@@ -193,13 +215,19 @@ $('scroll-bottom-btn').addEventListener('click', () => {
 
 // ── Agent state helpers ───────────────────────────────────────────
 const AGENT_MAP = {
-  planner:'agent-planner', coordinator:'agent-coordinator',
-  coder:'agent-coder', merger:'agent-merger', qa:'agent-qa', qa_tester:'agent-qa'
+  planner: 'agent-planner', 
+  conflict_manager: 'agent-conflict-manager',
+  coder: 'agent-coder', 
+  verification: 'agent-verification'
 };
 
 const STAGE_AGENT = {
-  planning:'planner', awaiting_approval:'planner',
-  coordinating:'coordinator', coding:'coder', merging:'merger', qa:'qa'
+  planning: 'planner', 
+  awaiting_plan_approval: 'planner',
+  coordinating: 'conflict_manager', 
+  coding: 'coder', 
+  verifying: 'verification', 
+  review_ready: 'verification'
 };
 
 function setAgentState(key, state) {
@@ -215,13 +243,13 @@ function resetAgents() {
   Object.keys(AGENT_MAP).forEach(k => setAgentState(k, 'idle'));
 }
 
-function applyStatus(status) {
+function applyStatus(status, planPayload) {
   $('pipeline-stage').textContent =
-    status.status.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase());
+    status.status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 
   const active = STAGE_AGENT[status.status];
   if (active) {
-    const order = ['planner','coordinator','coder','merger','qa'];
+    const order = ['planner', 'conflict_manager', 'coder', 'verification'];
     const idx = order.indexOf(active);
     order.forEach((a, i) => setAgentState(a, i < idx ? 'done' : i === idx ? 'running' : 'idle'));
   }
@@ -230,18 +258,35 @@ function applyStatus(status) {
     Object.entries(status.agentStates).forEach(([a, s]) => setAgentState(a, s));
   }
 
-  if (status.status === 'awaiting_approval' && status.plan && !approvalPending) {
-    approvalPending = true;
-    planText.textContent = status.plan;
-    approvalWaiting.classList.add('hidden');
-    approvalContent.classList.remove('hidden');
-    approvalDone.classList.add('hidden');
-    switchTab('approval');
-    showNotification('📋 Plan ready — review and approve.', 'success', 5000);
+  // HitL 1: Plan Approval
+  if (status.status === 'awaiting_plan_approval' && planPayload && !pendingHitL1) {
+    pendingHitL1 = true;
+    planText.innerHTML = planPayload.replace(/\\n/g, '<br/>');
+    reviewWaiting.classList.add('hidden');
+    planReviewContent.classList.remove('hidden');
+    resultReviewContent.classList.add('hidden');
+    reviewDone.classList.add('hidden');
+    switchTab('review');
+    showNotification('📋 Plan ready — review and approve.', 'success', 2500);
+  } else if (status.status !== 'awaiting_plan_approval') {
+    pendingHitL1 = false;
+  }
+
+  // HitL 2: Result Approval
+  if (status.status === 'review_ready' && !pendingHitL2) {
+    pendingHitL2 = true;
+    reviewWaiting.classList.add('hidden');
+    planReviewContent.classList.add('hidden');
+    resultReviewContent.classList.remove('hidden');
+    reviewDone.classList.add('hidden');
+    switchTab('review');
+    showNotification('🚀 PR ready — review and approve.', 'success', 2500);
+  } else if (status.status !== 'review_ready') {
+    pendingHitL2 = false;
   }
 
   if (status.status === 'done') {
-    resetAgents(); setAgentState('qa', 'done');
+    resetAgents(); setAgentState('verification', 'done');
     appendLog('✅ Pipeline complete!', 'success');
     launchBtn.disabled = false; launchBtn.textContent = '🚀 Launch Agents';
   }
@@ -277,17 +322,19 @@ window.addEventListener('message', ({ data: msg }) => {
       switchTab('logs');
       launchBtn.textContent = '⏳ Running…';
 
-      approvalWaiting.classList.remove('hidden');
-      approvalContent.classList.add('hidden');
-      approvalDone.classList.add('hidden');
-      approvalPending = false;
+      reviewWaiting.classList.remove('hidden');
+      planReviewContent.classList.add('hidden');
+      resultReviewContent.classList.add('hidden');
+      reviewDone.classList.add('hidden');
+      pendingHitL1 = false;
+      pendingHitL2 = false;
 
       $('backend-status').className = 'online';
       $('backend-status-text').textContent = 'Online';
       break;
 
     case 'statusUpdate':
-      applyStatus(msg.status); break;
+      applyStatus(msg.status, msg.plan); break;
   }
 });
 

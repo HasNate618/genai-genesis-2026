@@ -28,7 +28,7 @@
   <nav class="tab-bar">
     <button class="tab-btn active" data-tab="settings" id="tab-settings">⚙ Settings</button>
     <button class="tab-btn" data-tab="goal"     id="tab-goal">Goal</button>
-    <button class="tab-btn" data-tab="approval" id="tab-approval">Plan</button>
+    <button class="tab-btn" data-tab="review"   id="tab-review">Review</button>
     <button class="tab-btn" data-tab="agents"   id="tab-agents">Agents</button>
     <button class="tab-btn" data-tab="logs"     id="tab-logs">Logs</button>
   </nav>
@@ -123,30 +123,52 @@
   </section>
 
   <!-- ══════════════════════════════════════════════════════════
-       PLAN APPROVAL PANEL
+       REVIEW PANEL (Dual HitL Gates)
   ═══════════════════════════════════════════════════════════════ -->
-  <section id="panel-approval" class="panel">
+  <section id="panel-review" class="panel">
 
-    <div class="section-title">Plan Review</div>
+    <div class="section-title">Human-in-the-Loop Review</div>
 
     <!-- Waiting state -->
-    <div id="approval-waiting" class="empty-state">
+    <div id="review-waiting" class="empty-state">
       <div class="empty-icon">⏳</div>
-      <p>Waiting for Planner Agent<br/>to generate a plan...</p>
+      <p>Waiting for an item to review...</p>
     </div>
 
-    <!-- Plan ready -->
-    <div id="approval-content" class="hidden">
+    <!-- HitL 1: Plan Review -->
+    <div id="plan-review-content" class="hidden">
+      <div class="status-done mb-8">📋 Please review the Technical Roadmap</div>
       <div class="plan-box" id="plan-text"></div>
+      
+      <div class="feedback-section mt-8">
+        <div class="section-title">Feedback</div>
+        <textarea id="plan-feedback" placeholder="Optional: Provide feedback to the planner if revising..." rows="3"></textarea>
+      </div>
+
       <div class="action-row center mt-8">
-        <button class="btn btn-success" id="approve-btn">✅ Approve</button>
-        <button class="btn btn-danger"  id="deny-btn">❌ Revise</button>
+        <button class="btn btn-success" id="approve-plan-btn">✅ Approve Plan</button>
+        <button class="btn btn-feedback"  id="deny-plan-btn">≡ Revise with Feedback</button>
       </div>
     </div>
 
-    <!-- Approved -->
-    <div id="approval-done" class="hidden">
-      <div class="status-done">✓ Plan approved — executing!</div>
+    <!-- HitL 2: Result Review -->
+    <div id="result-review-content" class="hidden">
+      <div class="status-done mb-8">🚀 PR Ready! Please review the final execution.</div>
+      
+      <div class="feedback-section mt-8">
+        <div class="section-title">Feedback</div>
+        <textarea id="result-feedback" placeholder="Optional: Provide feedback to the coder if revising..." rows="3"></textarea>
+      </div>
+
+      <div class="action-row center mt-8">
+        <button class="btn btn-success" id="approve-result-btn">✅ Approve & Merge</button>
+        <button class="btn btn-feedback"  id="deny-result-btn">≡ Revise PR with Feedback</button>
+      </div>
+    </div>
+
+    <!-- Approved / Idle -->
+    <div id="review-done" class="hidden">
+      <div class="status-done">✓ Review complete — agents are executing!</div>
     </div>
 
   </section>
@@ -164,16 +186,16 @@
         <div class="agent-icon">🧠</div>
         <div class="agent-info">
           <div class="agent-name">Planner</div>
-          <div class="agent-role">Generates implementation plan</div>
+          <div class="agent-role">Generates technical roadmap</div>
         </div>
         <span class="badge badge-idle">Idle</span>
       </div>
 
-      <div class="agent-card" id="agent-coordinator">
+      <div class="agent-card" id="agent-conflict-manager">
         <div class="agent-icon">🎯</div>
         <div class="agent-info">
-          <div class="agent-name">Coordinator</div>
-          <div class="agent-role">Splits &amp; assigns tasks</div>
+          <div class="agent-name">Conflict Mgr</div>
+          <div class="agent-role">Chunks tasks & context</div>
         </div>
         <span class="badge badge-idle">Idle</span>
       </div>
@@ -182,25 +204,16 @@
         <div class="agent-icon">💻</div>
         <div class="agent-info">
           <div class="agent-name">Coders</div>
-          <div class="agent-role">Parallel code generation</div>
+          <div class="agent-role">Parallel branch execution</div>
         </div>
         <span class="badge badge-idle">Idle</span>
       </div>
 
-      <div class="agent-card" id="agent-merger">
-        <div class="agent-icon">🔀</div>
-        <div class="agent-info">
-          <div class="agent-name">Merger</div>
-          <div class="agent-role">Combines agent outputs</div>
-        </div>
-        <span class="badge badge-idle">Idle</span>
-      </div>
-
-      <div class="agent-card" id="agent-qa">
+      <div class="agent-card" id="agent-verification">
         <div class="agent-icon">🧪</div>
         <div class="agent-info">
-          <div class="agent-name">QA Tester</div>
-          <div class="agent-role">Validates final output</div>
+          <div class="agent-name">Verification</div>
+          <div class="agent-role">Automated QA & Linters</div>
         </div>
         <span class="badge badge-idle">Idle</span>
       </div>

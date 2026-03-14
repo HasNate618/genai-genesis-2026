@@ -116,7 +116,7 @@ export class PanelManager {
         }
 
         try {
-          const { job_id } = await this.backendClient.startRun({
+          const { job_id } = await this.backendClient.startJob({
             goal: msg.goal,
             coderCount: msg.coderCount,
             geminiKey: keys.gemini,
@@ -135,18 +135,33 @@ export class PanelManager {
         break;
       }
 
-      case 'approve':
-      case 'deny': {
-        if (!this.currentJobId) {return;}
+      case 'reviewPlan': {
+        if (!this.currentJobId) return;
         try {
-          await this.backendClient.sendApproval(
-            this.currentJobId,
-            msg.command === 'approve'
-          );
+          await this.backendClient.reviewPlan(this.currentJobId, msg.approved, msg.feedback);
           this.panel?.webview.postMessage({
             command: 'notification',
             type: 'success',
-            text: msg.command === 'approve' ? 'Plan approved — agents proceeding!' : 'Plan denied — replanning...',
+            text: msg.approved ? 'Plan approved — execution starting!' : 'Feedback sent to Planner...',
+          });
+        } catch (err: any) {
+          this.panel?.webview.postMessage({
+            command: 'notification',
+            type: 'error',
+            text: `Approval error: ${err.message}`,
+          });
+        }
+        break;
+      }
+
+      case 'reviewResult': {
+        if (!this.currentJobId) return;
+        try {
+          await this.backendClient.reviewResult(this.currentJobId, msg.approved, msg.feedback);
+          this.panel?.webview.postMessage({
+            command: 'notification',
+            type: 'success',
+            text: msg.approved ? 'PR approved — checking out and merging!' : 'Feedback sent to Coder...',
           });
         } catch (err: any) {
           this.panel?.webview.postMessage({
@@ -172,10 +187,19 @@ export class PanelManager {
 
   private startPolling(jobId: string): void {
     this.stopPolling();
+    let lastStatus = '';
     this.pollInterval = setInterval(async () => {
       try {
         const status = await this.backendClient.getStatus(jobId);
-        this.panel?.webview.postMessage({ command: 'statusUpdate', status });
+        
+        let planPayload = undefined;
+        if (status.status === 'awaiting_plan_approval' && lastStatus !== 'awaiting_plan_approval') {
+          const planData = await this.backendClient.getPlan(jobId);
+          planPayload = planData.plan;
+        }
+        lastStatus = status.status;
+
+        this.panel?.webview.postMessage({ command: 'statusUpdate', status, plan: planPayload });
 
         if (status.status === 'done' || status.status === 'failed') {
           this.stopPolling();
