@@ -69,10 +69,17 @@ dmypy.json
 secrets/
 .secrets
 
-# Node (if present)
+# Node / VS Code Extension
 node_modules/
-package-lock.json
+out/
+dist/
+.vscode-test/
+*.vsix
+npm-debug.log
+yarn-error.log
 yarn.lock
+# Track package-lock.json for vscode-extension
+!vscode-extension/package-lock.json
 
 # MacOS
 .DS_Store

@@ -14,8 +14,22 @@ from backend.memory.schemas import RecordType, WorkflowStage
 
 
 router = APIRouter(prefix="/memory", tags=["memory"])
-_store = MoorchehVectorStore()
-_writer = WorkflowContextWriter(_store)
+_store: MoorchehVectorStore | None = None
+_writer: WorkflowContextWriter | None = None
+
+
+def _get_store() -> MoorchehVectorStore:
+    global _store
+    if _store is None:
+        _store = MoorchehVectorStore()
+    return _store
+
+
+def _get_writer() -> WorkflowContextWriter:
+    global _writer
+    if _writer is None:
+        _writer = WorkflowContextWriter(_get_store())
+    return _writer
 
 
 class SearchRequest(BaseModel):
@@ -44,7 +58,7 @@ class DebugWriteRequest(BaseModel):
 @router.post("/provision")
 async def provision_namespace() -> dict[str, Any]:
     try:
-        return _store.provision_namespace()
+        return _get_store().provision_namespace()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to provision namespace: {exc}") from exc
 
@@ -52,7 +66,7 @@ async def provision_namespace() -> dict[str, Any]:
 @router.get("/health")
 async def health() -> dict[str, Any]:
     try:
-        return _store.health_check()
+        return _get_store().health_check()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Health check failed: {exc}") from exc
 
@@ -64,13 +78,13 @@ async def config() -> dict[str, Any]:
 
 @router.get("/metrics")
 async def metrics() -> dict[str, Any]:
-    return _store.telemetry.snapshot()
+    return _get_store().telemetry.snapshot()
 
 
 @router.post("/search")
 async def search_context(payload: SearchRequest) -> dict[str, Any]:
     try:
-        records = _store.search_context(
+        records = _get_store().search_context(
             query_text=payload.query,
             top_k=payload.top_k,
             threshold=payload.threshold,
@@ -84,7 +98,7 @@ async def search_context(payload: SearchRequest) -> dict[str, Any]:
 @router.post("/write-debug")
 async def write_debug(payload: DebugWriteRequest) -> dict[str, Any]:
     try:
-        return _writer.write_event(
+        return _get_writer().write_event(
             workflow_id=payload.workflow_id,
             run_id=payload.run_id,
             record_type=payload.record_type,

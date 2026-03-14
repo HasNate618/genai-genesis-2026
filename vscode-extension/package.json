@@ -1,0 +1,86 @@
+{
+  "name": "agentic-army",
+  "displayName": "AgenticArmy",
+  "description": "Multi-agent collaboration system with human-in-the-loop approval workflow",
+  "version": "0.1.0",
+  "publisher": "agentic-army",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agentic-army-sidebar",
+          "title": "AgenticArmy",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "agentic-army-sidebar": [
+        {
+          "type": "webview",
+          "id": "agenticArmy.sidebarView",
+          "name": "AgenticArmy",
+          "icon": "media/icon.svg",
+          "contextualTitle": "AgenticArmy"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "agentic-army.openPanel",
+        "title": "AgenticArmy: Open Panel",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "agentic-army.startPipeline",
+        "title": "AgenticArmy: Start Pipeline"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "agentic-army.openPanel",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AgenticArmy",
+      "properties": {
+        "agenticArmy.backendPort": {
+          "type": "number",
+          "default": 8000,
+          "description": "Port for the AgenticArmy FastAPI backend"
+        },
+        "agenticArmy.coderAgentCount": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Number of parallel coder agents to spawn"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "lint": "eslint src"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0"
+  }
+}
