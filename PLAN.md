@@ -20,6 +20,7 @@ Multi-agent collaboration system with human-in-the-loop approval workflow for au
 3. **Agent Orchestration** (Railword)
    - Planning Agent
    - Coordinator Agent
+   - Conflict Analyst Agent
    - Coder Agents (multiple)
    - Merger Agent
    - QA Tester Agent
