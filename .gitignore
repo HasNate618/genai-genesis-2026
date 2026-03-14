@@ -1,9 +1,24 @@
 # Python
+# === Standard Node/VS Code ===
+node_modules/
+out/
+dist/
+.vscode-test/
+*.vsix
+npm-debug.log
+yarn-error.log
+
+# === Standard Python / Backend ===
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
 build/
 develop-eggs/
 dist/
@@ -112,3 +127,28 @@ logs/
 *.egg-info
 .installed.cfg
 pip-log.txt
+.pytest_cache/
+.coverage
+
+# === Environment Variables ===
+.env
+.env.local
+.env.dev
+.env.prod
+
+# === OS Generated Files ===
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# === Project Specific / Architecture ===
+# Ignored workspace / temporary files
+.vscode/settings.json
+.vscode/launch.json
+# Any specific temporary SQLite or DB files for Phase 2 memory
+*.sqlite3
+*.db

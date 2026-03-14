@@ -1,2 +1,1 @@
-"""API package for backend services."""
-
+# AgenticArmy backend api package

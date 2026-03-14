@@ -10,7 +10,6 @@ from backend.api.routes import router
 from backend.api.v1 import router as v1_router
 from backend.api.memory_routes import router as memory_router
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("AgenticArmy backend starting up...")
