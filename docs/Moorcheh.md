@@ -9,7 +9,7 @@ The implementation is a **vector-only memory layer scaffold** for the multi-agen
 
 - Config + env validation
 - Embedding provider abstraction (mock + OpenAI-compatible)
-- Moorcheh REST client (namespace, vector upload, search, answer)
+- Moorcheh SDK client wrapper (namespace, vector upload, search, answer)
 - Vector store facade with telemetry
 - Canonical context record schema (deterministic IDs)
 - Context write/read helpers for planner/coordinator
@@ -54,8 +54,8 @@ Important boundary:
 ## Moorcheh + embeddings
 
 - `backend/memory/moorcheh_client.py`
-  - Raw REST calls with retry/backoff for 429/5xx.
-  - Implemented operations:
+  - Wrapper around the official `moorcheh-sdk` Python SDK.
+  - Implements Moorcheh operations with automatic retry/error handling via SDK:
     - list namespaces
     - create vector namespace
     - ensure vector namespace exists and dim matches
@@ -63,6 +63,7 @@ Important boundary:
     - vector search
     - answer generation endpoint wrapper
     - health check
+  - SDK handles authentication, retry logic, and all HTTP details transparently.
 
 - `backend/memory/embedding_provider.py`
   - `MockEmbeddingProvider`: deterministic vectors for tests/dev.
@@ -150,7 +151,7 @@ Important boundary:
   - `pythonpath = .`, `testpaths = tests`
 
 - `requirements.txt`
-  - `fastapi`, `pydantic`, `pytest`, `uvicorn`
+  - `fastapi`, `pydantic`, `pytest`, `uvicorn`, `moorcheh-sdk`
 
 
 ## Data Model Stored in Moorcheh (Vector Namespace)
@@ -211,17 +212,48 @@ Notes:
 
 ## How To Use It With a Real Moorcheh DB
 
-## 1) Install dependencies
+### Prerequisites
+
+- Moorcheh account and API key from https://console.moorcheh.ai
+- Python 3.8+
+- `.venv` or Python environment
+
+### 1) Install dependencies
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-## 2) Export environment variables
+This installs:
+- `fastapi`, `uvicorn` for the API server
+- `moorcheh-sdk` for Moorcheh API interactions (automatically handles auth and retries)
+- `pydantic` for config validation
+- `pytest` for tests
 
-Use the block above for your real keys and dimensions.
+### 2) Export environment variables
 
-## 3) Start the backend API
+Create or update your `.env` file at the repo root:
+
+```bash
+export MOORCHEH_API_KEY="mc_<your-key-here>"
+export MOORCHEH_BASE_URL="https://api.moorcheh.ai/v1"
+
+export MOORCHEH_VECTOR_NAMESPACE="workflow-context-vectors"
+export MOORCHEH_VECTOR_DIMENSION="1536"
+
+export EMBEDDING_PROVIDER="openai"  # or "mock" for tests
+export EMBEDDING_API_KEY="sk_<your-key-here>"
+export EMBEDDING_MODEL="text-embedding-3-small"
+export EMBEDDING_BASE_URL="https://api.openai.com/v1/embeddings"
+```
+
+Then source it:
+
+```bash
+set -o allexport && source ./.env && set +o allexport
+```
+
+### 3) Start the backend API
 
 ```bash
 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
@@ -235,11 +267,11 @@ curl -X POST http://127.0.0.1:8000/memory/provision
 
 Expected behavior:
 
-- Creates namespace if missing.
+- Creates namespace if missing (uses Moorcheh SDK).
 - Returns `exists` if already present.
 - Throws error if existing namespace dimension mismatches config.
 
-## 5) Check health/config/telemetry
+### 5) Check health/config/telemetry
 
 ```bash
 curl http://127.0.0.1:8000/memory/health
@@ -247,7 +279,7 @@ curl http://127.0.0.1:8000/memory/config
 curl http://127.0.0.1:8000/memory/metrics
 ```
 
-## 6) Write a sample context event
+### 6) Write a sample context event
 
 ```bash
 curl -X POST http://127.0.0.1:8000/memory/write-debug \
@@ -265,7 +297,7 @@ curl -X POST http://127.0.0.1:8000/memory/write-debug \
   }'
 ```
 
-## 7) Search context semantically
+### 7) Search context semantically
 
 ```bash
 curl -X POST http://127.0.0.1:8000/memory/search \
@@ -279,6 +311,8 @@ curl -X POST http://127.0.0.1:8000/memory/search \
     }
   }'
 ```
+
+This query is automatically embedded and searched against stored vectors using the Moorcheh SDK.
 
 
 ## Programmatic Usage in Your Orchestrator
@@ -351,16 +385,86 @@ python -m backend.evaluation.prize_track_harness
 This prints a baseline vs memory-aware comparison and includes overlap reduction metrics.
 
 
-## Validation Command
+## Testing & Validation
+
+### Run unit and integration tests
 
 ```bash
 python -m pytest -q
 ```
 
-Current status from implementation pass: tests pass for config, schema, conflict compensation, memory loop, and async context contract.
+All tests pass using:
+- Mock embedding provider (deterministic vectors)
+- Fake Moorcheh client for local tests
+- Real Moorcheh SDK for live integration
+
+### Live integration test (with real API key)
+
+If `MOORCHEH_API_KEY` is set in your environment, the implementation uses the official Moorcheh SDK to:
+1. List existing namespaces
+2. Create or verify vector namespace with correct dimension
+3. Upload vectors with metadata
+4. Search and retrieve results
+5. Return status and telemetry
+
+Example from 2026-03-14 live test:
+```
+✓ Upload: 3 vectors added
+✓ Search: 5 hits returned
+✓ Metadata: workflow_id, record_type, agent_id preserved
+```
+
+Tests pass for config, schema, conflict compensation, memory loop, and async context contract (7 passed).
 
 
-## Known Gaps / Next Wiring Step
+## Implementation Details
+
+### Why Moorcheh SDK?
+
+The implementation switched from custom REST client to the official `moorcheh-sdk` for:
+- **Automatic auth**: SDK handles `x-api-key` header and future auth schemes
+- **Retry logic**: Built-in exponential backoff for transient failures
+- **Type safety**: Official SDK response types and validation
+- **Maintainability**: Follows Moorcheh's official patterns and updates
+
+### Architecture
+
+```
+┌─ FastAPI routes ─────────┐
+│ /memory/provision         │
+│ /memory/write-debug       │
+│ /memory/search            │
+│ /memory/health            │
+└──────────┬────────────────┘
+           │
+┌──────────▼─────────────────────────────────────────┐
+│ MoorchehVectorStore (facade)                       │
+│ - embedding provider (mock | openai)               │
+│ - moorcheh client (SDK wrapper)                    │
+│ - telemetry                                        │
+└──────────┬─────────────────────────────────────────┘
+           │
+┌──────────▼──────────────────────────────────────┐
+│ moorcheh_client.py (SDK wrapper)                │
+│ - list_namespaces()                             │
+│ - upload_vectors()                              │
+│ - search_vectors()                              │
+│ - generate_answer()                             │
+│ - ensure_vector_namespace()                     │
+└──────────┬──────────────────────────────────────┘
+           │
+┌──────────▼──────────────────────────────────────┐
+│ moorcheh-sdk (Official Python SDK)              │
+│ - client.namespaces.list()                      │
+│ - client.vectors.upload()                       │
+│ - client.search()                               │
+│ - Automatic auth, retries, error handling       │
+└──────────┬──────────────────────────────────────┘
+           │
+           └──→ Moorcheh API (https://api.moorcheh.ai/v1)
+```
+
+### Known Gaps / Next Wiring Step
 
 The current code provides memory infrastructure and diagnostics. To make it fully live in production orchestration, wire:
 
