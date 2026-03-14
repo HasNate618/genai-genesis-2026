@@ -173,10 +173,7 @@ class MoorchehStore:
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
-        self._use_fallback = (
-            not _MOORCHEH_AVAILABLE
-            or not self._settings.moorcheh_api_key
-        )
+        self._use_fallback = not _MOORCHEH_AVAILABLE or not self._settings.moorcheh_api_key
         if self._use_fallback:
             self._fallback = _FallbackStore(self._settings.fallback_dir)
             logger.info("moorcheh_store.init", backend="local_fallback")

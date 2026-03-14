@@ -200,7 +200,7 @@ class CompactionWorker:
             topic_tags = list(
                 set().union(*[_extract_keywords(t) for t in texts])
             )[:10]
-            task_ids = list({r.payload.get("task_id", "") for r in cluster if r.payload.get("task_id")})
+            task_ids = list({r.payload.get("task_id") for r in cluster if r.payload.get("task_id")})
 
             summary_record = MemoryRecord(
                 id=summary_id,

@@ -170,7 +170,7 @@ def test_query_context(mock_engine: CoordinationEngine):
     assert "answer" in result
     assert isinstance(result["sources"], list)
     assert isinstance(result["grounded"], bool)
-    # Should find at least 1 relevant record
+    # grounded=True means at least one source record was cited
     assert result["grounded"] is True
     assert len(result["sources"]) >= 1
 

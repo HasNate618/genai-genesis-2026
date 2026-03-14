@@ -24,7 +24,8 @@ class RecordStatus(str, Enum):
 
 
 def make_record_id(record_type: str, project_id: str) -> str:
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    # UTC timestamp in compact ISO 8601 format (YYYYMMDDTHHMMSSZ)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     short_uuid = uuid.uuid4().hex[:8]
     return f"{record_type}:{project_id}:{ts}:{short_uuid}"
 
@@ -32,8 +33,8 @@ def make_record_id(record_type: str, project_id: str) -> str:
 @dataclass
 class TaskClaimPayload:
     task_description: str = ""
-    file_paths: list = field(default_factory=list)
-    dependencies: list = field(default_factory=list)
+    file_paths: list[str] = field(default_factory=list)
+    dependencies: list[str] = field(default_factory=list)
     task_id: str = ""
 
 
@@ -50,14 +51,14 @@ class PlanStepPayload:
 class DecisionPayload:
     task_id: str = ""
     decision_text: str = ""
-    affected_files: list = field(default_factory=list)
+    affected_files: list[str] = field(default_factory=list)
     rationale: str = ""
 
 
 @dataclass
 class FileChangeIntentPayload:
     task_id: str = ""
-    file_paths: list = field(default_factory=list)
+    file_paths: list[str] = field(default_factory=list)
     change_description: str = ""
     change_type: str = "modify"  # create | modify | delete | rename
 
@@ -72,10 +73,10 @@ class DependencyEdgePayload:
 @dataclass
 class ConflictAlertPayload:
     risk_score: float = 0.0
-    channels: dict = field(default_factory=dict)
-    conflicting_record_ids: list = field(default_factory=list)
+    channels: dict[str, float] = field(default_factory=dict)
+    conflicting_record_ids: list[str] = field(default_factory=list)
     recommendation: str = "proceed"
-    suggested_order: list = field(default_factory=list)
+    suggested_order: list[str] = field(default_factory=list)
     new_intent_id: str = ""
 
 
@@ -83,16 +84,16 @@ class ConflictAlertPayload:
 class MergeEventPayload:
     source_workspace: str = ""
     target_workspace: str = ""
-    files_changed: list = field(default_factory=list)
+    files_changed: list[str] = field(default_factory=list)
     conflicts_resolved: int = 0
     merge_commit: str = ""
 
 
 @dataclass
 class SummaryPayload:
-    compressed_from_ids: list = field(default_factory=list)
-    topic_tags: list = field(default_factory=list)
-    task_ids: list = field(default_factory=list)
+    compressed_from_ids: list[str] = field(default_factory=list)
+    topic_tags: list[str] = field(default_factory=list)
+    task_ids: list[str] = field(default_factory=list)
     original_record_count: int = 0
     chars_before: int = 0
     chars_after: int = 0

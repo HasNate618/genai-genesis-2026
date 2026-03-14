@@ -33,6 +33,10 @@ def _post(path: str, payload: dict) -> dict:
         return {"error": str(exc)}
 
 
+def _truncate(text: str, max_len: int = 60) -> str:
+    return text[:max_len] + ("..." if len(text) > max_len else "")
+
+
 def main() -> None:
     st.set_page_config(
         page_title="SPM — Shared Agent Memory Layer",
@@ -96,7 +100,7 @@ def main() -> None:
             rows.append(
                 {
                     "Agent": c["agent_id"],
-                    "Task": c["task_description"][:60] + ("..." if len(c["task_description"]) > 60 else ""),
+                    "Task": _truncate(c["task_description"]),
                     "Status": c["status"],
                     "Files": ", ".join(c["file_paths"][:3]),
                     "Importance": c["importance"],
