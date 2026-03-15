@@ -489,4 +489,6 @@ window.addEventListener('message', ({ data: msg }) => {
 
 // ── Init ──────────────────────────────────────────────────────────
 switchTab('settings');
-setRepoPath(window.__WORKSPACE_PATH__ || '');
+// Initialize empty; the extension will push the real workspace path via postMessage('workspacePath').
+// Avoid treating unresolved template placeholders (e.g. '{{WORKSPACE_PATH}}') as real paths.
+setRepoPath('');
