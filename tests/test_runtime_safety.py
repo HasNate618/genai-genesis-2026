@@ -121,6 +121,41 @@ def test_tool_runtime_blocks_workspace_escape(tmp_path: Path) -> None:
         runtime.run_command("python -c 'print(1)")
 
 
+def test_merge_branches_syncs_working_tree_when_clean(tmp_path: Path) -> None:
+    repo = tmp_path / "repo-sync"
+    _init_repo(repo)
+
+    runtime = WorkdirRuntime(repo_root=repo, workdir_root=tmp_path / ".workdirs")
+    context = runtime.prepare_agent_workdir(job_id="job-sync", agent_id="coder-1", base_branch="main")
+    (context.path / "app.py").write_text("print('hello')\n", encoding="utf-8")
+    runtime.commit_all(context, message="Add app.py")
+
+    synced = runtime.merge_branches(base_branch="main", branches=[context.branch])
+
+    assert synced, "working tree should have been synced since it is clean and on 'main'"
+    assert (repo / "app.py").read_text(encoding="utf-8") == "print('hello')\n"
+
+
+def test_merge_branches_skips_sync_when_working_tree_is_dirty(tmp_path: Path) -> None:
+    repo = tmp_path / "repo-dirty"
+    _init_repo(repo)
+
+    runtime = WorkdirRuntime(repo_root=repo, workdir_root=tmp_path / ".workdirs")
+    context = runtime.prepare_agent_workdir(job_id="job-dirty", agent_id="coder-1", base_branch="main")
+    (context.path / "feature.py").write_text("x = 1\n", encoding="utf-8")
+    runtime.commit_all(context, message="Add feature.py")
+
+    # Dirty the working tree before merge.
+    (repo / "dirty.txt").write_text("unstaged change\n", encoding="utf-8")
+
+    synced = runtime.merge_branches(base_branch="main", branches=[context.branch])
+
+    assert not synced, "working tree should NOT be synced when it is dirty"
+    # The branch ref is still updated; the user can sync manually.
+    head = _run_git(repo, "rev-parse", "main").stdout.strip()
+    assert head  # branch ref was updated regardless
+
+
 def test_task_file_fallback_scaffolds_concrete_targets_only(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

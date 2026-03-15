@@ -104,18 +104,20 @@ class WorkdirRuntime:
         )
         return True
 
-    def merge_branches(self, *, base_branch: str, branches: Iterable[str]) -> None:
+    def merge_branches(self, *, base_branch: str, branches: Iterable[str]) -> bool:
         """Merge *branches* into *base_branch* using a disposable worktree.
 
-        This never checks out or modifies the user's main working tree, so it
-        is safe even when the repo has uncommitted changes.
+        After updating the branch ref the method attempts to sync the main
+        working tree so that new files are immediately visible in the editor.
+        Returns True when the working tree was synced, False when it was left
+        untouched (e.g. it was dirty or checked out to a different branch).
         """
         resolved_base_branch = self.resolve_base_branch(base_branch)
         branches_to_merge = [
             branch for branch in self._normalize_branches(branches) if branch != resolved_base_branch
         ]
         if not branches_to_merge:
-            return
+            return False
 
         merge_dir = self.workdir_root / "_merge-finalize"
         merge_branch = "_agentic-merge-temp"
@@ -124,6 +126,11 @@ class WorkdirRuntime:
             self._run_git(["worktree", "remove", "--force", str(merge_dir)], check=False)
             shutil.rmtree(merge_dir, ignore_errors=True)
         merge_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        # Snapshot the working tree state BEFORE advancing the branch ref.
+        # We check for user-made uncommitted changes now, so that the subsequent
+        # `git reset --hard HEAD` (after update-ref) doesn't clobber anything.
+        workdir_eligible = self._workdir_eligible_for_sync(resolved_base_branch)
 
         self._run_git(["worktree", "add", "-B", merge_branch, str(merge_dir), resolved_base_branch])
         try:
@@ -139,6 +146,28 @@ class WorkdirRuntime:
             self._run_git(["worktree", "remove", "--force", str(merge_dir)], check=False)
             shutil.rmtree(merge_dir, ignore_errors=True)
             self._run_git(["branch", "-D", merge_branch], check=False)
+
+        if workdir_eligible:
+            # Branch ref now points to merged_sha; reset the working tree to match.
+            self._run_git(["reset", "--hard", "HEAD"], check=False)
+            return True
+        return False
+
+    def _workdir_eligible_for_sync(self, branch: str) -> bool:
+        """Return True when the main working tree can be safely fast-forwarded.
+
+        Conditions: the working tree is checked out on *branch* and has no
+        uncommitted changes (staged or unstaged).  This must be called BEFORE
+        update-ref so that the status comparison is against the current HEAD,
+        not the incoming merged HEAD.
+        """
+        current = self._run_git(
+            ["rev-parse", "--abbrev-ref", "HEAD"], check=False
+        ).stdout.strip()
+        if current != branch:
+            return False
+        dirty = self._run_git(["status", "--porcelain"], check=False).stdout.strip()
+        return not dirty
 
     def head_commit(self, ref: str = "HEAD") -> str:
         return self._run_git(["rev-parse", ref]).stdout.strip()

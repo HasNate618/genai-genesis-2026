@@ -861,7 +861,7 @@ class JobRuntime:
                         # Merge real coder branches into base only after final human approval.
                         branches = _unique_non_empty(coder_branches)
                         if branches:
-                            await asyncio.to_thread(
+                            workdir_synced = await asyncio.to_thread(
                                 hooks.workdirs.merge_branches,
                                 base_branch=effective_base_branch,
                                 branches=branches,
@@ -887,6 +887,19 @@ class JobRuntime:
                                     f"(commit {merged_commit[:12]})"
                                 ),
                             )
+                            if workdir_synced:
+                                await self._append_log(
+                                    job_id,
+                                    "Working tree updated — files are now visible in your editor.",
+                                )
+                            else:
+                                await self._append_log(
+                                    job_id,
+                                    (
+                                        f"Working tree not on '{effective_base_branch}' or has uncommitted changes. "
+                                        f"Run: git checkout {effective_base_branch} && git reset --hard HEAD"
+                                    ),
+                                )
 
                         await asyncio.to_thread(
                             hooks.writer.write_event,
