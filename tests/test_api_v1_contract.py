@@ -7,12 +7,15 @@ from backend.agents.railtracks_runtime import CoordinatorAssignment, Coordinator
 from backend.api.v1 import set_runtime
 from backend.core.job_runtime import (
     JobRuntime,
+    _conflict_threshold_to_percent,
     _detect_simple_python_target,
+    _effective_coder_branches,
     _extract_primary_py_target,
     _is_coder_recoverable_failure_reason,
     _is_contract_mismatch_reason,
     _is_no_change_reason,
     _is_no_outcome_reason,
+    _is_syntax_error_reason,
     _qa_failure_reason_from_command,
     _resolve_github_repo_name,
     _simple_python_goal_tasks,
@@ -286,9 +289,48 @@ def test_no_outcome_reason_catches_no_coding_actions_phrasing() -> None:
     assert not _is_no_outcome_reason("Transient network error occurred.")
 
 
+def test_syntax_error_reason_is_recoverable() -> None:
+    reason = "Generated code contains syntax errors (mismatched brackets in state assignments)."
+    assert _is_syntax_error_reason(reason)
+    assert _is_coder_recoverable_failure_reason(reason)
+
+
+def test_conflict_threshold_to_percent_uses_settings_scale_and_clamps() -> None:
+    assert _conflict_threshold_to_percent(0.35) == 35
+    assert _conflict_threshold_to_percent(0.0) == 0
+    assert _conflict_threshold_to_percent(1.0) == 100
+    assert _conflict_threshold_to_percent(-0.3) == 0
+    assert _conflict_threshold_to_percent(1.7) == 100
+
+
+def test_effective_coder_branches_reuses_history_when_round_has_no_new_commits() -> None:
+    assert _effective_coder_branches(current_round=["agentic/1/coder-1"], historical=[]) == [
+        "agentic/1/coder-1"
+    ]
+    assert _effective_coder_branches(
+        current_round=[],
+        historical=["agentic/1/coder-1", "agentic/1/coder-1"],
+    ) == ["agentic/1/coder-1"]
+
+
 def test_extract_primary_py_target_returns_first_py_file() -> None:
     tasks = _simple_python_goal_tasks("calc.py")
     assert _extract_primary_py_target(tasks, "build a calc") == "calc.py"
+
+
+def test_extract_primary_py_target_skips_init_py() -> None:
+    from backend.memory.conflict_context import TaskDraft
+    tasks = [
+        TaskDraft(task_id="t1", agent_id="coder-1", file_paths=["src/converter/__init__.py", "src/converter/base.py"]),
+        TaskDraft(task_id="t2", agent_id="coder-1", file_paths=["src/converter/weight.py"]),
+    ]
+    assert _extract_primary_py_target(tasks, "build a converter") == "src/converter/base.py"
+
+
+def test_extract_primary_py_target_uses_init_as_last_resort() -> None:
+    from backend.memory.conflict_context import TaskDraft
+    tasks = [TaskDraft(task_id="t1", agent_id="coder-1", file_paths=["src/__init__.py"])]
+    assert _extract_primary_py_target(tasks, "build a python app") == "src/__init__.py"
 
 
 def test_extract_primary_py_target_falls_back_to_main_for_python_goal() -> None:

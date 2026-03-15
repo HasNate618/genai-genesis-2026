@@ -40,6 +40,7 @@ STATUS_DONE = "done"
 STATUS_FAILED = "failed"
 MAX_COORDINATION_ATTEMPTS = 8
 MAX_CONFLICT_RETRIES = 3
+DETERMINISTIC_ESCALATION_FAILURES = 2
 
 
 class JobRuntimeError(RuntimeError):
@@ -201,6 +202,7 @@ class JobRuntime:
         coordination_attempt = 0
         conflict_retry_count = 0
         coder_fail_count = 0
+        historical_coder_branches: list[str] = []
         simple_python_target = _detect_simple_python_target(request.goal)
         effective_base_branch = request.base_branch
 
@@ -401,17 +403,21 @@ class JobRuntime:
                         )
                     else:
                         assignment_payloads = [_task_to_assignment_payload(task) for task in adjusted_tasks]
+                        threshold_percent = _conflict_threshold_to_percent(
+                            hooks.compensator.settings.conflict_threshold
+                        )
                         conflict_out = await hooks.executor.run_conflict_analysis(
                             goal=request.goal,
                             plan=plan_text,
                             assignments=assignment_payloads,
-                            threshold_percent=20,
+                            threshold_percent=threshold_percent,
                         )
                         await self._append_log(
                             job_id,
                             (
                                 f"Conflict analysis score={conflict_out.overall_conflict_score:.2f} "
-                                f"threshold_breached={conflict_out.threshold_breached}"
+                                f"threshold_breached={conflict_out.threshold_breached} "
+                                f"threshold={threshold_percent}%"
                             ),
                         )
 
@@ -456,7 +462,7 @@ class JobRuntime:
 
                 # After repeated coder failures, collapse to a single primary .py
                 # file so the coordinator's multi-file plan can't keep blocking progress.
-                if coder_fail_count >= 2 and not simple_python_target:
+                if coder_fail_count >= DETERMINISTIC_ESCALATION_FAILURES and not simple_python_target:
                     forced_target = _extract_primary_py_target(adjusted_tasks, request.goal)
                     if forced_target:
                         simple_python_target = forced_target
@@ -537,6 +543,7 @@ class JobRuntime:
                         )
                         if committed:
                             coder_branches.append(context.branch)
+                            historical_coder_branches.append(context.branch)
 
                         coder_status = str(coder_out.status).strip().lower()
                         coder_reason = str(coder_out.next_action_reason)
@@ -587,6 +594,8 @@ class JobRuntime:
                             )
                             if committed and context.branch not in coder_branches:
                                 coder_branches.append(context.branch)
+                            if committed:
+                                historical_coder_branches.append(context.branch)
                             if committed:
                                 await self._append_log(
                                     job_id,
@@ -660,11 +669,34 @@ class JobRuntime:
                     coder_fail_count += 1
                     continue
                 if hooks is not None and not coder_branches:
-                    coder_fail_count += 1
-                    loop_source = "manual_retry"
-                    loop_reason = "No committed work product was produced during coding."
-                    await self._append_log(job_id, f"Task failed. Returning to coordination: {loop_reason}")
-                    continue
+                    reusable_branches = _effective_coder_branches(
+                        current_round=[],
+                        historical=historical_coder_branches,
+                    )
+                    if reusable_branches:
+                        coder_branches = reusable_branches
+                        await self._append_log(
+                            job_id,
+                            (
+                                "No new commits were produced this round; reusing previously "
+                                f"committed branch(es): {', '.join(reusable_branches)}"
+                            ),
+                        )
+                        coder_fail_count = 0
+                    else:
+                        coder_fail_count += 1
+                        loop_source = "manual_retry"
+                        loop_reason = "No committed work product was produced during coding."
+                        await self._append_log(job_id, f"Task failed. Returning to coordination: {loop_reason}")
+                        continue
+                if hooks is not None and coder_branches:
+                    historical_coder_branches = _unique_non_empty(
+                        [*historical_coder_branches, *coder_branches]
+                    )
+                    coder_branches = _effective_coder_branches(
+                        current_round=coder_branches,
+                        historical=historical_coder_branches,
+                    )
                 coder_fail_count = 0
                 changed_files = sorted(
                     {
@@ -768,7 +800,11 @@ class JobRuntime:
                     deterministic_qa = await asyncio.to_thread(
                         qa_tool_runtime.run_command, "pytest tests/ -q", 300
                     )
-                    deterministic_qa_passed = int(deterministic_qa.get("exit_code", 1)) == 0
+                    deterministic_qa_exit = int(deterministic_qa.get("exit_code", 1))
+                    # 0 = all tests passed, 4 = path not found, 5 = no tests collected.
+                    # Treat "no tests exist" the same as "all tests passed" so the
+                    # pipeline doesn't loop forever on repos without a test suite.
+                    deterministic_qa_passed = deterministic_qa_exit in (0, 4, 5)
                     verification_summary = (
                         f"QA status={qa_out.status} passed={qa_out.qa_passed} "
                         f"commands_failed={qa_out.summary.commands_failed}"
@@ -1326,13 +1362,34 @@ def _detect_simple_python_target(goal: str) -> str | None:
     return default_filename
 
 
+_LOW_VALUE_PY_NAMES = {"__init__.py", "setup.py", "conftest.py", "__main__.py"}
+
+
 def _extract_primary_py_target(tasks: list[TaskDraft], goal: str) -> str | None:
-    """Return the first sanitised .py file path found across all task assignments."""
+    """Return the best substantive .py file from task assignments.
+
+    Skips low-value boilerplate files (``__init__.py``, ``setup.py``, etc.)
+    unless they are the *only* Python files available.
+    """
+    best: str | None = None
+    fallback: str | None = None
     for task in tasks:
         for file_path in task.file_paths:
             candidate = _sanitize_relative_path(file_path)
-            if candidate and candidate.endswith(".py") and not _is_placeholder_task_path(candidate):
-                return candidate
+            if not candidate or not candidate.endswith(".py"):
+                continue
+            if _is_placeholder_task_path(candidate):
+                continue
+            basename = candidate.rsplit("/", 1)[-1] if "/" in candidate else candidate
+            if basename in _LOW_VALUE_PY_NAMES:
+                if fallback is None:
+                    fallback = candidate
+                continue
+            return candidate
+    if best is not None:
+        return best
+    if fallback is not None:
+        return fallback
     normalized_goal = goal.lower()
     if "python" in normalized_goal:
         return "main.py"
@@ -1503,6 +1560,7 @@ def _is_coder_recoverable_failure_reason(reason: str) -> bool:
         _is_contract_mismatch_reason(reason)
         or _is_no_change_reason(reason)
         or _is_no_outcome_reason(reason)
+        or _is_syntax_error_reason(reason)
     )
 
 
@@ -1557,6 +1615,35 @@ def _is_no_outcome_reason(reason: str) -> bool:
         "no work was performed",
     )
     return any(pattern in normalized for pattern in patterns)
+
+
+def _is_syntax_error_reason(reason: str) -> bool:
+    normalized = reason.strip().lower()
+    if not normalized:
+        return False
+    patterns = (
+        "generated code contains syntax errors",
+        "contains syntax errors",
+        "syntax error",
+        "invalid syntax",
+        "mismatched bracket",
+        "mismatched parenth",
+        "unbalanced bracket",
+        "unbalanced parenth",
+    )
+    return any(pattern in normalized for pattern in patterns)
+
+
+def _conflict_threshold_to_percent(conflict_threshold: float) -> int:
+    percent = int(round(max(0.0, min(1.0, conflict_threshold)) * 100))
+    return max(0, min(100, percent))
+
+
+def _effective_coder_branches(*, current_round: list[str], historical: list[str]) -> list[str]:
+    current = _unique_non_empty(current_round)
+    if current:
+        return current
+    return _unique_non_empty(historical)
 
 
 def _qa_failure_reason_from_command(command_result: dict) -> str:

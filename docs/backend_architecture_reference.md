@@ -28,7 +28,7 @@ Loopbacks:
 - Merge failure -> `coordinating`
 - QA failure -> `coordinating`
 - Final result rejection -> `coordinating`
-- No committed work product -> `coordinating` (explicit retry reason)
+- No committed work product in current round -> reuse previously committed job branches when available; otherwise `coordinating` (explicit retry reason)
 
 Retry budget:
 
@@ -163,7 +163,9 @@ Response:
   - In-memory job registry.
   - Background pipeline and HITL event synchronization.
   - Railtracks phase calls and loopback handling.
+  - Conflict-analysis rerun threshold is derived from `CONFLICT_THRESHOLD` (`0.35` -> `35%`) instead of a fixed percentage.
   - Deterministic fallback for simple Python goals (`hello world`) when coder output is empty/non-usable.
+  - After coder retries, runtime escalates earlier to deterministic single-file targeting to reduce repeated non-productive loops.
   - Assignment path hardening: coordinator outputs without concrete `predicted_files` are inferred from task summary/goal to avoid placeholder `workspace/task_*.txt` loops.
   - Deterministic task-file fallback can scaffold missing target files when coder output is recoverable but no commit is produced.
   - Work-product invariant: merge/finalization only proceed with committed coding artifacts.
@@ -228,4 +230,4 @@ python -m pytest tests/ -q
 npm --prefix vscode-extension run compile --silent
 ```
 
-Current branch baseline: backend tests pass (`48`).
+Current branch baseline: backend tests pass (`55`).
