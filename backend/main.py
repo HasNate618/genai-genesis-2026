@@ -33,11 +33,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# v1_router uses the JobRuntime state machine and is registered first so that
-# its routes take priority over the simpler mock in routes (which is kept for
-# backwards-compatibility with the original main-branch contract).
-app.include_router(v1_router)
+# routes contains the current HITL workflow implementation and should take
+# priority over legacy v1 routes for overlapping `/api/v1/*` endpoints.
 app.include_router(router)
+app.include_router(v1_router)
 app.include_router(memory_router)
 
 

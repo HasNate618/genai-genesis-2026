@@ -26,6 +26,19 @@ Agents: Planner, Coordinator, Conflict Analyst, Coder(s), Merger, QA Tester
 - [RailTracks for agent orchestration](https://github.com/RailtownAI/railtracks/)
 - [Moorcheh agent memory SDK](https://github.com/moorcheh-ai/moorcheh-python-sdk)
 
+## Backend runtime modes
+- `AGENTIC_ARMY_AGENT_RUNTIME=contract` (default): uses Gemini markdown-contract execution path.
+- `AGENTIC_ARMY_AGENT_RUNTIME=railtracks`: uses Railtracks agent nodes with role-scoped tools.
+
+### Railtracks tool permissions by role
+- Planner / Coordinator / Conflict Analyst: `read`, `glob`, `grep`
+- Coding / Merge / QA: `read`, `write`, `edit`, `bash`, `glob`, `grep`
+
+### Safety controls
+- Writes default to per-agent isolated workspaces under `.agent_workspaces/`
+- Repository writes require explicit `repo/...` path prefix
+- Path traversal is blocked, and command execution is limited to an allowlisted binary set
+
 ## Synopsis
 Basic workflow:
 1. Human provides goal; high-level process, success metrics, etc. Move on.
