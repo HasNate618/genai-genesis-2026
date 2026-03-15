@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -119,13 +120,11 @@ class WorkdirRuntime:
         if not branches_to_merge:
             return False
 
-        merge_dir = self.workdir_root / "_merge-finalize"
-        merge_branch = "_agentic-merge-temp"
-
-        if merge_dir.exists():
-            self._run_git(["worktree", "remove", "--force", str(merge_dir)], check=False)
-            shutil.rmtree(merge_dir, ignore_errors=True)
-        merge_dir.parent.mkdir(parents=True, exist_ok=True)
+        # Use unique directory and branch names per merge to avoid cross-job interference.
+        merge_dir = Path(
+            tempfile.mkdtemp(prefix="_merge-finalize-", dir=self.workdir_root)
+        )
+        merge_branch = f"_agentic-merge-temp-{uuid.uuid4().hex}"
 
         # Snapshot the working tree state BEFORE advancing the branch ref.
         # We check for user-made uncommitted changes now, so that the subsequent
