@@ -63,7 +63,7 @@
 
     <hr class="divider" />
 
-    <!-- Scope segmented control (like Global/Workspace in reference) -->
+    <!-- Scope segmented control -->
     <div class="field-row">
       <div class="field-label">Scope</div>
       <div class="seg-control" id="scope-control">
@@ -190,19 +190,28 @@
   <!-- ══════════════════════════════════════════════════════════
        AGENTS PANEL
   ═══════════════════════════════════════════════════════════════ -->
-  <section id="panel-agents" class="panel">
+  <section id="panel-agents" class="panel panel-fill">
 
     <div class="section-title">Pipeline Status</div>
 
-    <div class="agent-grid" id="agent-grid">
+    <div class="agent-accordion" id="agent-accordion">
 
-      <div class="agent-card" id="agent-planner">
-        <div class="agent-icon">🧠</div>
-        <div class="agent-info">
-          <div class="agent-name">Planner</div>
-          <div class="agent-role">Generates technical roadmap</div>
+      <!-- Planner -->
+      <div class="agent-card" id="agent-planner" data-agent="planner">
+        <div class="agent-header" id="agent-header-planner">
+          <span class="agent-chevron" id="chevron-planner">▶</span>
+          <div class="agent-icon">🧠</div>
+          <div class="agent-info">
+            <div class="agent-name">Planner</div>
+            <div class="agent-role">Generates technical roadmap</div>
+          </div>
+          <span class="badge badge-idle">Idle</span>
         </div>
-        <span class="badge badge-idle">Idle</span>
+        <div class="agent-result-body hidden" id="agent-result-planner">
+          <div class="agent-result-content" id="agent-result-content-planner">
+            <span class="agent-result-empty">No results yet.</span>
+          </div>
+        </div>
       </div>
 
       <div class="agent-card" id="agent-coordinator-conflict">
@@ -211,16 +220,24 @@
           <div class="agent-name">Coordinator / Conflict</div>
           <div class="agent-role">Task split + overlap analysis</div>
         </div>
-        <span class="badge badge-idle">Idle</span>
       </div>
 
-      <div class="agent-card" id="agent-coder">
-        <div class="agent-icon">💻</div>
-        <div class="agent-info">
-          <div class="agent-name">Coders</div>
-          <div class="agent-role">Parallel branch execution</div>
+      <!-- Coders -->
+      <div class="agent-card" id="agent-coder" data-agent="coder">
+        <div class="agent-header" id="agent-header-coder">
+          <span class="agent-chevron" id="chevron-coder">▶</span>
+          <div class="agent-icon">💻</div>
+          <div class="agent-info">
+            <div class="agent-name">Coders</div>
+            <div class="agent-role">Parallel branch execution</div>
+          </div>
+          <span class="badge badge-idle">Idle</span>
         </div>
-        <span class="badge badge-idle">Idle</span>
+        <div class="agent-result-body hidden" id="agent-result-coder">
+          <div class="agent-result-content" id="agent-result-content-coder">
+            <span class="agent-result-empty">No results yet.</span>
+          </div>
+        </div>
       </div>
 
       <div class="agent-card" id="agent-merger">
@@ -229,12 +246,11 @@
           <div class="agent-name">Merger</div>
           <div class="agent-role">Merge + post-merge verification</div>
         </div>
-        <span class="badge badge-idle">Idle</span>
       </div>
 
     </div>
 
-    <!-- Pipeline status bar — like Config tab row in reference image -->
+    <!-- Pipeline status bar -->
     <div class="section-title" style="margin-top:4px">Stage</div>
     <div class="pipeline-bar">
       <span class="pipeline-label">Current</span>
@@ -246,7 +262,7 @@
   <!-- ══════════════════════════════════════════════════════════
        LOGS PANEL
   ═══════════════════════════════════════════════════════════════ -->
-  <section id="panel-logs" class="panel">
+  <section id="panel-logs" class="panel panel-fill">
 
     <div class="log-controls">
       <div class="section-title" style="margin:0">Console</div>

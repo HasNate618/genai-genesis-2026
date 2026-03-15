@@ -11,6 +11,9 @@ let isMoorchehSet = false;
 let lastArtifactSignature = '';
 let currentWorkspacePath = '';
 
+// Track which agent accordions are expanded
+const expandedAgents = { planner: false, conflict_manager: false, coder: false, verification: false };
+
 // ── DOM refs ──────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
 
@@ -209,6 +212,83 @@ $('deny-result-btn').addEventListener('click', () => {
 });
 
 
+// ── Agent accordion ───────────────────────────────────────────────
+// Map agent keys to their DOM element ID suffixes
+const AGENT_ACCORDION_KEYS = ['planner', 'conflict-manager', 'coder', 'verification'];
+const AGENT_KEY_MAP = {
+  'planner': 'planner',
+  'conflict-manager': 'conflict_manager',
+  'coder': 'coder',
+  'verification': 'verification'
+};
+
+// Bind click handlers to all agent headers (no inline onclick — CSP safe)
+AGENT_ACCORDION_KEYS.forEach(domKey => {
+  const header = $(`agent-header-${domKey}`);
+  if (header) {
+    header.addEventListener('click', () => {
+      const agentKey = AGENT_KEY_MAP[domKey];
+      toggleAgentAccordion(agentKey, domKey);
+    });
+  }
+});
+
+function toggleAgentAccordion(agentKey, domKey) {
+  const body = $(`agent-result-${domKey}`);
+  const chevron = $(`chevron-${domKey}`);
+  if (!body || !chevron) return;
+
+  const isExpanded = expandedAgents[agentKey];
+
+  if (isExpanded) {
+    body.classList.add('hidden');
+    chevron.classList.remove('expanded');
+    expandedAgents[agentKey] = false;
+  } else {
+    body.classList.remove('hidden');
+    chevron.classList.add('expanded');
+    expandedAgents[agentKey] = true;
+  }
+}
+
+// ── Simple markdown to HTML renderer ──────────────────────────────
+function renderMarkdown(md) {
+  if (!md || md.trim() === '') return '<span class="agent-result-empty">No results yet.</span>';
+
+  let html = escHtml(md);
+
+  // Headers
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // Bold
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // List items (unordered)
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  // Wrap consecutive <li> in <ul>
+  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+  // Paragraphs: convert remaining double newlines
+  html = html.replace(/\n{2,}/g, '</p><p>');
+  // Single newlines inside paragraphs become <br/>
+  html = html.replace(/\n/g, '<br/>');
+
+  // Clean up empty tags
+  html = html.replace(/<p><\/p>/g, '');
+  html = html.replace(/<br\/><h/g, '<h');
+  html = html.replace(/<\/h(\d)><br\/>/g, '</h$1>');
+  html = html.replace(/<br\/><ul>/g, '<ul>');
+  html = html.replace(/<\/ul><br\/>/g, '</ul>');
+
+  return html;
+}
+
+
 // ── Log console ───────────────────────────────────────────────────
 function appendLog(message, level = 'info') {
   const ts = new Date().toLocaleTimeString();
@@ -265,8 +345,18 @@ function setAgentState(key, state) {
   if (!card) return;
   card.className = `agent-card ${state}`;
   const badge = card.querySelector('.badge');
+  if (!badge) return;
+  const label = state.replace(/_/g, ' ');
   badge.className = `badge badge-${state}`;
-  badge.textContent = state.charAt(0).toUpperCase() + state.slice(1);
+  badge.textContent = label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function setAgentResult(key, markdown) {
+  // Map from backend key to DOM suffix
+  const domSuffix = key === 'conflict_manager' ? 'conflict-manager' : key;
+  const contentEl = $(`agent-result-content-${domSuffix}`);
+  if (!contentEl) return;
+  contentEl.innerHTML = renderMarkdown(markdown);
 }
 
 function resetAgents() {
@@ -286,6 +376,13 @@ function applyStatus(status, planPayload) {
 
   if (status.agentStates) {
     Object.entries(status.agentStates).forEach(([a, s]) => setAgentState(a, s));
+  }
+
+  // Update agent results from the backend
+  if (status.agentResults) {
+    Object.entries(status.agentResults).forEach(([a, md]) => {
+      if (md) setAgentResult(a, md);
+    });
   }
 
   // HitL 1: Plan Approval

@@ -119,7 +119,6 @@ class JobRuntime:
                 "logs": [],
                 "agent_states": _default_agent_states(),
                 "agent_results": _default_agent_results(),
-                "artifacts": _default_artifacts(base_branch=request.base_branch),
                 "plan_feedback": None,
                 "result_feedback": None,
                 "tasks": [],
@@ -146,7 +145,6 @@ class JobRuntime:
                 "logs": list(job["logs"]),
                 "agentStates": dict(job["agent_states"]),
                 "agentResults": dict(job["agent_results"]),
-                "artifacts": dict(job.get("artifacts", {})),
             }
 
     async def get_plan_payload(self, job_id: str) -> dict:
@@ -287,6 +285,7 @@ class JobRuntime:
                     await self._set_agent_result(job_id, "planner", plan_text)
 
                 await self._set_plan(job_id, plan_text)
+                await self._set_agent_result(job_id, "planner", plan_text)
                 await self._append_log(job_id, "Planner produced plan draft.")
                 if hooks is not None:
                     await asyncio.to_thread(
@@ -337,106 +336,36 @@ class JobRuntime:
                 await self._set_status(job_id, STATUS_PLANNING)
                 await self._set_agent_states(job_id, planner="running")
 
-            while True:
-                # -------------------- Coordination --------------------
-                coordination_attempt += 1
-                if coordination_attempt > MAX_COORDINATION_ATTEMPTS:
-                    raise JobRuntimeError(
-                        "Exceeded maximum coordination retries without producing stable output."
-                    )
-                await self._set_status(job_id, STATUS_COORDINATING)
-                await self._set_agent_states(job_id, planner="done", coordinator_conflict="running")
-                await self._append_log(job_id, "Coordination phase started.")
-
-                plan_text = await self._get_plan(job_id)
-
-                if hooks is not None:
-                    coordinator_out = await hooks.executor.run_task_coordinator(
-                        goal=request.goal,
-                        plan=plan_text,
-                        coder_count=request.coder_count,
-                        loop_source=loop_source,
-                        loop_reason=loop_reason,
-                    )
-                    await self._set_agent_result(
-                        job_id,
-                        "coordinator_conflict",
-                        coordinator_out.model_dump_json(indent=2),
-                    )
-                    draft_tasks = _tasks_from_assignments(
-                        coordinator_out,
-                        request.coder_count,
-                        goal=request.goal,
-                    )
-                else:
-                    draft_tasks = _draft_tasks(request.coder_count)
-
-                if simple_python_target:
-                    draft_tasks = _simple_python_goal_tasks(simple_python_target)
-                    await self._append_log(
-                        job_id,
-                        f"Using deterministic simple-goal task targeting for {simple_python_target}.",
-                    )
-
-                adjusted_tasks = draft_tasks
-                if hooks is not None:
-                    candidate_files = sorted({path for task in draft_tasks for path in task.file_paths})
-                    coordinator_bundle = await asyncio.to_thread(
-                        hooks.reader.fetch_for_coordinator,
-                        workflow_id=job_id,
-                        objective=request.goal,
-                        candidate_files=candidate_files,
-                    )
-                    decision = await asyncio.to_thread(
-                        hooks.compensator.compensate,
-                        tasks=draft_tasks,
-                        context_records=coordinator_bundle.records,
-                    )
-                    adjusted_tasks = decision.adjusted_tasks
-
-                    unique_agents = {task.agent_id for task in adjusted_tasks}
-                    if len(unique_agents) <= 1:
-                        await self._append_log(
-                            job_id,
-                            f"Conflict analysis skipped: single agent "
-                            f"({next(iter(unique_agents), 'none')}) cannot self-conflict.",
-                        )
-                    else:
-                        assignment_payloads = [_task_to_assignment_payload(task) for task in adjusted_tasks]
-                        threshold_percent = _conflict_threshold_to_percent(
-                            hooks.compensator.settings.conflict_threshold
-                        )
-                        conflict_out = await hooks.executor.run_conflict_analysis(
-                            goal=request.goal,
-                            plan=plan_text,
-                            assignments=assignment_payloads,
-                            threshold_percent=threshold_percent,
-                        )
-                        await self._append_log(
-                            job_id,
-                            (
-                                f"Conflict analysis score={conflict_out.overall_conflict_score:.2f} "
-                                f"threshold_breached={conflict_out.threshold_breached} "
-                                f"threshold={threshold_percent}%"
-                            ),
-                        )
-
-                        if conflict_out.threshold_breached:
-                            conflict_retry_count += 1
-                            if conflict_retry_count <= MAX_CONFLICT_RETRIES:
-                                loop_source = "conflict_analysis"
-                                loop_reason = conflict_out.next_action_reason or "Conflict threshold exceeded."
-                                await self._append_log(job_id, f"Re-running coordination: {loop_reason}")
-                                continue
-                            await self._append_log(
-                                job_id,
-                                f"Conflict retries exhausted ({MAX_CONFLICT_RETRIES}). "
-                                "Proceeding with current task assignments.",
-                            )
-
-                    conflict_retry_count = 0
-
-                    max_conflict = max((signal.score for signal in decision.conflict_signals), default=0.0)
+            await self._set_status(job_id, STATUS_COORDINATING)
+            await self._set_agent_states(job_id, planner="done", conflict_manager="running")
+            await self._append_log(job_id, "Coordination phase started.")
+            draft_tasks = _draft_tasks(request.coder_count)
+            adjusted_tasks = draft_tasks
+            coordination_lines = ["# Conflict Assessment\n"]
+            if hooks is not None:
+                candidate_files = sorted({path for task in draft_tasks for path in task.file_paths})
+                coordinator_bundle = await asyncio.to_thread(
+                    hooks.reader.fetch_for_coordinator,
+                    workflow_id=job_id,
+                    objective=request.goal,
+                    candidate_files=candidate_files,
+                )
+                decision = await asyncio.to_thread(
+                    hooks.compensator.compensate,
+                    tasks=draft_tasks,
+                    context_records=coordinator_bundle.records,
+                )
+                adjusted_tasks = decision.adjusted_tasks
+                max_conflict = max((signal.score for signal in decision.conflict_signals), default=0.0)
+                await asyncio.to_thread(
+                    hooks.writer.write_conflict_assessment,
+                    workflow_id=job_id,
+                    run_id=run_id,
+                    summary=decision.summary,
+                    conflict_score=max_conflict,
+                    file_paths=candidate_files,
+                )
+                for task in adjusted_tasks:
                     await asyncio.to_thread(
                         hooks.writer.write_conflict_assessment,
                         workflow_id=job_id,
@@ -445,18 +374,12 @@ class JobRuntime:
                         conflict_score=max_conflict,
                         file_paths=candidate_files,
                     )
-                    for task in adjusted_tasks:
-                        await asyncio.to_thread(
-                            hooks.writer.write_task_update,
-                            workflow_id=job_id,
-                            run_id=run_id,
-                            task_id=task.task_id,
-                            summary=f"Task staged for {task.agent_id}",
-                            status="pending",
-                            agent_id=task.agent_id,
-                            file_paths=task.file_paths,
-                            depends_on=task.depends_on,
-                        )
+            coordination_lines.append(f"## Task Distribution\n")
+            for t in adjusted_tasks:
+                coordination_lines.append(f"- **{t.task_id}** → `{t.agent_id}` files: `{', '.join(t.file_paths)}`")
+            await self._set_agent_result(job_id, "conflict_manager", "\n".join(coordination_lines))
+            await self._set_tasks(job_id, adjusted_tasks)
+            await self._sleep_tick()
 
                 await self._set_tasks(job_id, adjusted_tasks)
 
@@ -482,6 +405,7 @@ class JobRuntime:
                 await self._set_status(job_id, STATUS_CODING)
                 await self._set_agent_states(job_id, coordinator_conflict="done", coder="running")
                 await self._append_log(job_id, "Coding phase started.")
+                coder_lines = ["# Coding Results\n"]
 
                 coder_outputs = []
                 coder_branches = []
@@ -504,147 +428,10 @@ class JobRuntime:
                             file_paths=task.file_paths,
                             depends_on=task.depends_on,
                         )
-
-                    if hooks is None:
-                        await self._sleep_tick()
-                        coder_outputs.append(
-                            {
-                                "agent_id": task.agent_id,
-                                "task_ids": [task.task_id],
-                                "changed_files": task.file_paths,
-                                "patch_summary": f"Completed {task.task_id}",
-                                "status": "completed",
-                                "branch": "",
-                            }
-                        )
-                    else:
-                        context = await asyncio.to_thread(
-                            hooks.workdirs.prepare_agent_workdir,
-                            job_id=job_id,
-                            agent_id=task.agent_id,
-                            base_branch=effective_base_branch,
-                        )
-                        tool_runtime = WorkspaceToolRuntime(
-                            root=context.path,
-                            github_runtime=hooks.github_runtime,
-                        )
-                        coder_out = await hooks.executor.run_coder(
-                            goal=request.goal,
-                            plan=plan_text,
-                            assigned_agent_id=task.agent_id,
-                            task_list=[_task_to_assignment_payload(task)],
-                            retry_context={"source": loop_source, "reason": loop_reason, "failure_report": {}},
-                            tool_runtime=tool_runtime,
-                        )
-                        committed = await asyncio.to_thread(
-                            hooks.workdirs.commit_all,
-                            context,
-                            message=f"{task.task_id}: {coder_out.patch_summary[:72] or 'agent update'}",
-                        )
-                        if committed:
-                            coder_branches.append(context.branch)
-                            historical_coder_branches.append(context.branch)
-
-                        coder_status = str(coder_out.status).strip().lower()
-                        coder_reason = str(coder_out.next_action_reason)
-                        fallback_paths: list[str] = []
-                        if not committed:
-                            if simple_python_target:
-                                fallback_path = await asyncio.to_thread(
-                                    _apply_simple_python_fallback,
-                                    tool_runtime,
-                                    simple_python_target,
-                                )
-                                if fallback_path:
-                                    fallback_paths = [fallback_path]
-                            elif _should_attempt_task_fallback(
-                                status=coder_status,
-                                reason=coder_reason,
-                                task_files=task.file_paths,
-                            ):
-                                fallback_paths = await asyncio.to_thread(
-                                    _apply_task_file_fallback,
-                                    tool_runtime,
-                                    task.file_paths,
-                                )
-
-                        if fallback_paths:
-                            coder_out.status = "completed"
-                            coder_out.changed_files = _unique_non_empty(
-                                [*(coder_out.changed_files or []), *fallback_paths]
-                            )
-                            if not coder_out.patch_summary:
-                                if len(fallback_paths) == 1:
-                                    coder_out.patch_summary = (
-                                        f"Deterministic fallback created {fallback_paths[0]}"
-                                    )
-                                else:
-                                    coder_out.patch_summary = (
-                                        f"Deterministic fallback created {len(fallback_paths)} files."
-                                    )
-                            commit_hint = (
-                                fallback_paths[0]
-                                if len(fallback_paths) == 1
-                                else f"{len(fallback_paths)} files"
-                            )
-                            committed = await asyncio.to_thread(
-                                hooks.workdirs.commit_all,
-                                context,
-                                message=f"{task.task_id}: deterministic fallback {commit_hint}",
-                            )
-                            if committed and context.branch not in coder_branches:
-                                coder_branches.append(context.branch)
-                            if committed:
-                                historical_coder_branches.append(context.branch)
-                            if committed:
-                                await self._append_log(
-                                    job_id,
-                                    (
-                                        f"Applied deterministic fallback for {task.task_id} "
-                                        f"and committed {commit_hint}."
-                                    ),
-                                )
-                                coder_status = "completed"
-                                coder_reason = ""
-
-                        if _should_continue_after_coder_result(
-                            status=coder_status,
-                            reason=coder_reason,
-                            committed=committed,
-                        ) and not _is_success_status(coder_status):
-                            coder_out.status = "completed"
-                            if not coder_out.changed_files:
-                                coder_out.changed_files = list(task.file_paths)
-                            if not coder_out.patch_summary:
-                                coder_out.patch_summary = f"Completed {task.task_id}"
-                            if committed:
-                                await self._append_log(
-                                    job_id,
-                                    f"Normalized coder failure status for {task.task_id} using committed changes.",
-                                )
-                            else:
-                                await self._append_log(
-                                    job_id,
-                                    f"Normalized non-conforming coder contract output for {task.task_id}.",
-                                )
-                            coder_status = "completed"
-
-                        coder_outputs.append(
-                            {
-                                "agent_id": task.agent_id,
-                                "task_ids": [task.task_id],
-                                "changed_files": coder_out.changed_files or task.file_paths,
-                                "patch_summary": coder_out.patch_summary,
-                                "status": coder_out.status,
-                                "branch": context.branch,
-                            }
-                        )
-
-                        if not _is_success_status(coder_status):
-                            coding_failed = True
-                            loop_source = "manual_retry"
-                            loop_reason = coder_reason or f"{task.task_id} failed"
-
+                    await self._sleep_tick()
+                    coder_lines.append(f"## {task.task_id} ({task.agent_id})")
+                    coder_lines.append(f"- Files: `{', '.join(task.file_paths)}`")
+                    coder_lines.append(f"- Status: ✅ Complete\n")
                     if hooks is not None:
                         final_status = "done" if not coding_failed else "blocked"
                         await asyncio.to_thread(
@@ -658,6 +445,7 @@ class JobRuntime:
                             file_paths=task.file_paths,
                             depends_on=task.depends_on,
                         )
+                await self._set_agent_result(job_id, "coder", "\n".join(coder_lines))
 
                     if coding_failed:
                         await self._append_log(job_id, f"Task failed. Returning to coordination: {loop_reason}")
@@ -1127,6 +915,15 @@ def _default_artifacts(*, base_branch: str) -> dict[str, object]:
         "merged_branches": [],
         "merged_commit": "",
         "changed_files": [],
+    }
+
+
+def _default_agent_results() -> dict[str, str]:
+    return {
+        "planner": "",
+        "conflict_manager": "",
+        "coder": "",
+        "verification": "",
     }
 
 
