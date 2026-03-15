@@ -48,11 +48,16 @@ def build_tool_nodes(
 
         if not pattern.strip():
             raise WorkspaceGuardError("Glob pattern is required.")
+        if ".." in pattern:
+            raise WorkspaceGuardError("Glob pattern must not contain '..' path traversal.")
         matches: list[str] = []
         for path in workspace.repo_root.glob(pattern):
-            if not path.is_file() or _is_ignored(path, workspace.repo_root):
+            resolved = path.resolve()
+            if not resolved.is_relative_to(workspace.repo_root):
                 continue
-            matches.append(_relative(path, workspace.repo_root))
+            if not resolved.is_file() or _is_ignored(resolved, workspace.repo_root):
+                continue
+            matches.append(_relative(resolved, workspace.repo_root))
             if len(matches) >= 300:
                 break
         return matches
@@ -66,17 +71,22 @@ def build_tool_nodes(
             file_glob (str): Optional glob used to narrow files.
         """
 
+        if ".." in file_glob:
+            raise WorkspaceGuardError("File glob must not contain '..' path traversal.")
         regex = re.compile(pattern)
         results: list[str] = []
         for path in workspace.repo_root.glob(file_glob):
-            if not path.is_file() or _is_ignored(path, workspace.repo_root):
+            resolved = path.resolve()
+            if not resolved.is_relative_to(workspace.repo_root):
                 continue
-            if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf"}:
+            if not resolved.is_file() or _is_ignored(resolved, workspace.repo_root):
                 continue
-            text = path.read_text(encoding="utf-8", errors="ignore")
+            if resolved.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf"}:
+                continue
+            text = resolved.read_text(encoding="utf-8", errors="ignore")
             for line_no, line in enumerate(text.splitlines(), start=1):
                 if regex.search(line):
-                    results.append(f"{_relative(path, workspace.repo_root)}:{line_no}:{line[:220]}")
+                    results.append(f"{_relative(resolved, workspace.repo_root)}:{line_no}:{line[:220]}")
                     if len(results) >= 300:
                         return results
         return results
