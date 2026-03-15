@@ -10,6 +10,8 @@ from functools import lru_cache
 DEFAULT_MOORCHEH_BASE_URL = "https://api.moorcheh.ai/v1"
 DEFAULT_VECTOR_NAMESPACE = "workflow-context-vectors"
 DEFAULT_VECTOR_DIMENSION = 1536
+DEFAULT_LLM_BASE_URL = "https://qyt7893blb71b5d3.us-east-2.aws.endpoints.huggingface.cloud/v1"
+DEFAULT_LLM_MODEL = "openai/gpt-oss-120b"
 
 
 class ConfigError(ValueError):
@@ -63,6 +65,10 @@ class Settings:
     retrieval_top_k: int
     conflict_threshold: float
     max_context_window: int
+    llm_base_url: str = DEFAULT_LLM_BASE_URL
+    llm_model: str = DEFAULT_LLM_MODEL
+    llm_api_key: str = ""
+    llm_call_timeout_seconds: int = 180
 
     @classmethod
     def from_env(
@@ -71,11 +77,13 @@ class Settings:
         moorcheh_api_key: str | None = None,
         embedding_provider: str | None = None,
         embedding_api_key: str | None = None,
+        llm_api_key: str | None = None,
     ) -> "Settings":
         provider = (embedding_provider or _env("EMBEDDING_PROVIDER", default="mock")).lower()
         resolved_embedding_key = (
             embedding_api_key if embedding_api_key is not None else _env("EMBEDDING_API_KEY", default="")
         )
+        resolved_llm_key = llm_api_key if llm_api_key is not None else _env("LLM_API_KEY", default="")
         if provider != "mock" and not resolved_embedding_key:
             raise ConfigError(
                 "EMBEDDING_API_KEY is required when EMBEDDING_PROVIDER is not 'mock'."
@@ -100,6 +108,10 @@ class Settings:
                 "CONFLICT_THRESHOLD", default=0.35, min_value=0.0, max_value=1.0
             ),
             max_context_window=_env_int("MAX_CONTEXT_WINDOW", default=40),
+            llm_base_url=_env("LLM_BASE_URL", default=DEFAULT_LLM_BASE_URL),
+            llm_model=_env("LLM_MODEL", default=DEFAULT_LLM_MODEL),
+            llm_api_key=resolved_llm_key,
+            llm_call_timeout_seconds=_env_int("LLM_CALL_TIMEOUT_SECONDS", default=180),
         )
 
     def redacted(self) -> dict[str, str | int | float]:
@@ -115,6 +127,10 @@ class Settings:
             "retrieval_top_k": self.retrieval_top_k,
             "conflict_threshold": self.conflict_threshold,
             "max_context_window": self.max_context_window,
+            "llm_base_url": self.llm_base_url,
+            "llm_model": self.llm_model,
+            "llm_api_key": "(set)" if self.llm_api_key else "(not set)",
+            "llm_call_timeout_seconds": self.llm_call_timeout_seconds,
         }
 
 

@@ -145,6 +145,11 @@ launchBtn.addEventListener('click', () => {
   });
 });
 
+function resetLaunchButton() {
+  launchBtn.disabled = false;
+  launchBtn.textContent = '🚀 Launch Agents';
+}
+
 // ── Review (HitL Gates) ───────────────────────────────────────────
 // Plan Review (HitL 1)
 $('approve-plan-btn').addEventListener('click', () => {
@@ -288,11 +293,11 @@ function applyStatus(status, planPayload) {
   if (status.status === 'done') {
     resetAgents(); setAgentState('verification', 'done');
     appendLog('✅ Pipeline complete!', 'success');
-    launchBtn.disabled = false; launchBtn.textContent = '🚀 Launch Agents';
+    resetLaunchButton();
   }
   if (status.status === 'failed') {
     appendLog('❌ Pipeline failed.', 'error');
-    launchBtn.disabled = false; launchBtn.textContent = '🚀 Launch Agents';
+    resetLaunchButton();
   }
 
   if (status.logs?.length > logEntries.length) {
@@ -331,6 +336,10 @@ window.addEventListener('message', ({ data: msg }) => {
 
       $('backend-status').className = 'online';
       $('backend-status-text').textContent = 'Online';
+      break;
+
+    case 'runStartFailed':
+      resetLaunchButton();
       break;
 
     case 'statusUpdate':

@@ -6,9 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from backend.api.routes import router
 from backend.api.v1 import router as v1_router
-from backend.api.memory_routes import router as memory_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -26,19 +24,14 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:*", "vscode-webview://*"],
-    allow_origin_regex=r"http://localhost:\d+",
+    allow_origins=["http://localhost", "http://127.0.0.1"],
+    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|vscode-webview://.*)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# v1_router uses the JobRuntime state machine and is registered first so that
-# its routes take priority over the simpler mock in routes (which is kept for
-# backwards-compatibility with the original main-branch contract).
 app.include_router(v1_router)
-app.include_router(router)
-app.include_router(memory_router)
 
 
 @app.get("/health")

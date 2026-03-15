@@ -41,11 +41,11 @@
   ═══════════════════════════════════════════════════════════════ -->
   <section id="panel-settings" class="panel active">
 
-    <div class="section-title">API Keys</div>
+    <div class="section-title">Optional Keys (Legacy)</div>
 
     <!-- Gemini row -->
     <div class="field-row mb-8">
-      <div class="field-label"><span class="req">*</span>&nbsp;Gemini</div>
+      <div class="field-label">Gemini</div>
       <div class="field-input-wrap">
         <input type="password" id="gemini-key" placeholder="AIza..." autocomplete="off" spellcheck="false" />
         <button class="btn-icon" id="toggle-gemini" title="Show">👁</button>
@@ -74,6 +74,11 @@
 
     <div class="action-row mt-8">
       <button class="btn btn-primary btn-full" id="save-keys-btn">Save Keys</button>
+    </div>
+
+    <div class="info-box mt-8">
+      GitHub account auth is requested automatically when you launch a run.
+      Model API keys are not required for hosted endpoint mode.
     </div>
 
     <!-- Saved keys section -->

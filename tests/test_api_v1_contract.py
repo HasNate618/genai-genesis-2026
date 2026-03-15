@@ -148,3 +148,41 @@ def test_result_review_rejects_wrong_state() -> None:
         )
         assert response.status_code == 409
 
+
+def test_create_job_accepts_no_user_api_keys() -> None:
+    with _create_client() as client:
+        create = client.post(
+            "/api/v1/jobs",
+            json={
+                "goal": "Run with hosted LLM endpoint and no user model key.",
+                "coder_count": 2,
+                "github_token": "gho_dummy_token",
+                "github_repo": "owner/repo",
+                "base_branch": "main",
+            },
+        )
+        assert create.status_code == 200
+        job_id = create.json()["job_id"]
+        payload = _wait_for_status(client, job_id, "awaiting_plan_approval")
+        assert payload["status"] == "awaiting_plan_approval"
+
+
+def test_status_payload_contains_agent_results() -> None:
+    with _create_client() as client:
+        create = client.post(
+            "/api/v1/jobs",
+            json={
+                "goal": "Ensure status payload includes agent artifact output.",
+                "coder_count": 1,
+            },
+        )
+        assert create.status_code == 200
+        job_id = create.json()["job_id"]
+        payload = _wait_for_status(client, job_id, "awaiting_plan_approval")
+        assert "agentResults" in payload
+        assert set(payload["agentResults"].keys()) == {
+            "planner",
+            "conflict_manager",
+            "coder",
+            "verification",
+        }

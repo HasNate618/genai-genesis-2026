@@ -28,7 +28,10 @@ class CreateJobRequest(BaseModel):
     goal: str = Field(..., min_length=1)
     coder_count: int = Field(default=2, ge=1, le=32)
     gemini_key: str = ""
-    moorcheh_key: str = Field(..., min_length=1)
+    moorcheh_key: str = ""
+    github_token: str = ""
+    github_repo: str = ""
+    base_branch: str = Field(default="main", min_length=1)
 
 
 class ReviewRequest(BaseModel):
@@ -43,11 +46,18 @@ async def health() -> dict[str, str]:
 
 @router.post("/jobs")
 async def create_job(payload: CreateJobRequest) -> dict[str, str]:
+    goal = payload.goal.strip()
+    if not goal:
+        raise HTTPException(status_code=422, detail="goal must not be blank.")
+    base_branch = payload.base_branch.strip() or "main"
     launch = JobLaunchRequest(
-        goal=payload.goal,
+        goal=goal,
         coder_count=payload.coder_count,
-        gemini_key=payload.gemini_key,
-        moorcheh_key=payload.moorcheh_key,
+        gemini_key=payload.gemini_key.strip(),
+        moorcheh_key=payload.moorcheh_key.strip(),
+        github_token=payload.github_token.strip(),
+        github_repo=payload.github_repo.strip(),
+        base_branch=base_branch,
     )
     job_id = await _runtime.create_job(launch)
     _runtime.start_pipeline(job_id, launch)
@@ -90,4 +100,3 @@ async def review_result(job_id: str, payload: ReviewRequest) -> dict[str, bool]:
     except InvalidJobStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True}
-

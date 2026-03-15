@@ -1,120 +1,211 @@
-# AgenticArmy — Backend Architecture Reference
+# AgenticArmy Backend Architecture Reference
 
-This document provides a technical overview of the FastAPI backend and its communication protocol with the VS Code extension. It is designed as a reference for Phase 2, when the `asyncio.sleep()` mocks are replaced with actual `Railtracks` multi-agent workflows.
+This document is the API/runtime contract for the current backend implementation.
 
----
 
-## 1. System Topology
+## 1) Topology
 
-The system operates on a **Client-Server Polling** model.
+AgenticArmy runs as a local FastAPI service (default `http://localhost:8000`) and is consumed by the VS Code extension.
 
-**The Client (VS Code Extension):**
-- Written in TypeScript (Host) and HTML/CSS/JS (Webview UI).
-- [backendClient.ts](file:///c:/Users/amirb/Documents/VScode/Genesis%2026/genai-genesis-2026/vscode-extension/src/backendClient.ts) handles all HTTP `fetch` requests.
-- [panelManager.ts](file:///c:/Users/amirb/Documents/VScode/Genesis%2026/genai-genesis-2026/vscode-extension/src/panelManager.ts) (or [sidebarProvider.ts](file:///c:/Users/amirb/Documents/VScode/Genesis%2026/genai-genesis-2026/vscode-extension/src/sidebarProvider.ts)) manages a 2-second `setInterval` polling loop when a job is active.
+- Extension starts jobs with `POST /api/v1/jobs`.
+- Extension polls `GET /api/v1/jobs/{job_id}/status` every 2 seconds.
+- Two human review gates are unblocked via:
+  - `POST /api/v1/jobs/{job_id}/plan/review`
+  - `POST /api/v1/jobs/{job_id}/result/review`
 
-**The Server (FastAPI):**
-- Written in Python, running locally (`http://localhost:8000`).
-- Manages an in-memory dictionary of state (`_jobs`), keyed by uniquely generated `job_id` UUIDs.
-- Uses `asyncio.Event()` locks to pause background threads while waiting for Human-in-the-Loop HTTP callbacks.
 
----
+## 2) Runtime state machine
 
-## 2. The 3-Phase State Machine
+Exact statuses:
 
-A single `job_id` transitions through these exact string values in `job["status"]`. The UI parses these exact strings to highlight the active agent and render the review gates.
+`initializing -> planning -> awaiting_plan_approval -> coordinating -> coding -> verifying -> review_ready -> done|failed`
 
-| Status String | Active Agent UI | Trigger Event |
-| :--- | :--- | :--- |
-| `initializing` | Planner | `POST /jobs` |
-| `planning` | Planner | Background Task |
-| `awaiting_plan_approval` | Planner | HitL 1 Pause (Waits for `POST /plan/review`) |
-| `coordinating` | Conflict Mgr | HitL 1 Approved |
-| `coding` | Coders | Background Task |
-| `verifying` | Verification | Background Task |
-| `review_ready` | Verification | HitL 2 Pause (Waits for `POST /result/review`) |
-| `done` | *None (All Done)* | HitL 2 Approved / Merge completed |
-| `failed` | *Error States* | Uncaught Exception |
+Loopbacks:
 
----
+- Plan rejection -> `planning`
+- Conflict threshold breach -> `coordinating`
+- Coding failure -> `coordinating`
+- Merge failure -> `coordinating`
+- QA failure -> `coordinating`
+- Final result rejection -> `coordinating`
 
-## 3. Core Endpoints Reference
 
-All endpoints are prefixed with `/api/v1`. The VS Code extension expects these specific response shapes.
+## 3) API endpoints (`/api/v1`)
 
-### `GET /health`
-- **Purpose:** Extension ping to verify the python server is alive before running.
-- **Returns:** `{ "status": "ok", "service": "agentic-army-v1" }`
+## `GET /health`
 
-### `POST /jobs`
-- **Purpose:** Initiates a new AI run.
-- **Payload:** `{ "goal": string, "coder_count": int, "gemini_key": string, "moorcheh_key": string }`
-- **Behavior:** 
-  1. Creates job in `_jobs` dictionary.
-  2. Spawns `asyncio.create_task(_run_pipeline())` as a fire-and-forget background thread.
-- **Returns:** `{ "job_id": "uuid-string" }`
+Returns backend liveness:
 
-### `GET /jobs/{job_id}/plan`
-- **Purpose:** Fetches the generated markdown plan for the Human-in-the-Loop review.
-- **Behavior:** The extension *only* calls this once the `/status` poll returns `awaiting_plan_approval`.
-- **Returns:** `{ "status": string, "plan": "Markdown string payload" }`
+```json
+{ "status": "ok", "service": "agentic-army-v1" }
+```
 
-### `POST /jobs/{job_id}/plan/review`
-- **Purpose:** Unblocks HitL 1.
-- **Payload:** `{ "approved": boolean, "feedback": string }`
-- **Behavior:** 
-  1. Writes `job["plan_feedback"]` to state.
-  2. Calls `_plan_events[job_id].set()` to wake up the background pipeline thread.
-- **Returns:** `{ "ok": true }`
 
-### `GET /jobs/{job_id}/status`
-- **Purpose:** The main polling artery. Called every 2000ms by the extension.
-- **Behavior:** The background pipeline thread constantly updates the `logs` append-only list, and the `agent_states` dictionary. This endpoint dumps that state to the client for live rendering.
-- **Returns:** 
-  ```json
-  {
-    "status": "coding",
-    "logs": ["[10:00:00] Step started...", "[10:00:01] Coder running..."],
-    "agentStates": {
-      "planner": "done",
-      "conflict_manager": "done",
-      "coder": "running",
-      "verification": "idle"
-    }
+## `POST /jobs`
+
+Starts a job pipeline.
+
+Request:
+
+```json
+{
+  "goal": "string (required)",
+  "coder_count": 2,
+  "gemini_key": "",
+  "moorcheh_key": "",
+  "github_token": "",
+  "github_repo": "",
+  "base_branch": "main"
+}
+```
+
+Response:
+
+```json
+{ "job_id": "uuid" }
+```
+
+Notes:
+
+- `gemini_key` and `moorcheh_key` are backward-compatible optional fields.
+- Hosted LLM defaults are server-configured (`LLM_BASE_URL`, `LLM_MODEL`).
+- `github_token` is expected from VS Code GitHub auth when using GitHub-integrated flow.
+
+
+## `GET /jobs/{job_id}/plan`
+
+Returns current plan payload:
+
+```json
+{
+  "status": "awaiting_plan_approval",
+  "plan": "markdown or planner output text"
+}
+```
+
+
+## `POST /jobs/{job_id}/plan/review`
+
+Unblocks plan HITL gate.
+
+Request:
+
+```json
+{ "approved": true, "feedback": "optional" }
+```
+
+Response:
+
+```json
+{ "ok": true }
+```
+
+
+## `GET /jobs/{job_id}/status`
+
+Polling payload consumed by extension:
+
+```json
+{
+  "status": "coding",
+  "logs": ["[12:00:01] ..."],
+  "agentStates": {
+    "planner": "done",
+    "conflict_manager": "done",
+    "coder": "running",
+    "verification": "idle"
+  },
+  "agentResults": {
+    "planner": "{...}",
+    "conflict_manager": "{...}",
+    "coder": "{...}",
+    "verification": "{...}"
   }
-  ```
+}
+```
 
-### `POST /jobs/{job_id}/result/review`
-- **Purpose:** Unblocks HitL 2 (Final PR Delivery).
-- **Payload:** `{ "approved": boolean, "feedback": string }`
-- **Behavior:** 
-  1. Writes `job["result_feedback"]` to state.
-  2. Calls `_result_events[job_id].set()` to wake up the background pipeline thread to process the final Git merge or loop back to coding.
-- **Returns:** `{ "ok": true }`
 
----
+## `POST /jobs/{job_id}/result/review`
 
-## 4. Hooking in Real Agents (Phase 2 Checklist)
+Unblocks final HITL gate.
 
-When you are ready to replace [routes.py](file:///c:/Users/amirb/Documents/VScode/Genesis%2026/genai-genesis-2026/backend/api/routes.py) with real agents, here is precisely where the integrations belong:
+Request:
 
-1. **Replace `await asyncio.sleep(2)` in Phase 1:**
-   - Instantiate your `PlannerLayer` (Railtracks).
-   - Pass `req.goal` and `job["plan_feedback"]` to the LLM context.
-   - Write the generated output to `job["plan"]`.
+```json
+{ "approved": true, "feedback": "optional" }
+```
 
-2. **Replace `asyncio.sleep` in Task Coordination:**
-   - Make your Moorcheh API calls here. Extract vector embeddings for the files relevant to `job["plan"]`.
-   - Chunk the work into JSON tasks.
+Response:
 
-3. **Replace Git Mocking in Parallel Coding:**
-   - In Python, execute `git branch feature/XYZ` and `git checkout feature/XYZ`.
-   - Spawn multiple async `CoderAgent` instances, passing them the specific chunked instructions and Moorcheh context.
-   - Have them `git add .` and `git commit -m`. 
+```json
+{ "ok": true }
+```
 
-4. **Replace Verification Logic:**
-   - Instead of a sleep, use Python's `subprocess` to run `pytest` or `npm run compile`.
-   - Capture `stderr`. If `returncode != 0`, parse the stderr output, write it to the state, and `continue` your `while True` loop so it goes backward!
 
-5. **Replace the Mock Final Delivery:**
-   - If the user calls `/result/review` with `approved=True`, execute `git checkout main` and `git merge feature/XYZ`.
+## 4) Core runtime modules
+
+- `backend/core/job_runtime.py`
+  - In-memory job registry.
+  - Background pipeline and HITL event synchronization.
+  - Railtracks phase calls and loopback handling.
+
+- `backend/agents/railtracks_runtime.py`
+  - Contract-driven agent calls for planner/coordinator/conflict/coder/merge/qa.
+  - Structured outputs validated with Pydantic.
+
+- `backend/core/workdir_runtime.py`
+  - Isolated per-agent workdirs + branches.
+  - Verification workdir created from merged coder branches.
+  - Final merge to base branch on approval.
+
+- `backend/core/tool_runtime.py`
+  - Workspace-scoped tool execution with command/path guardrails.
+
+- `backend/core/github_runtime.py`
+  - Token-scoped GitHub API helper (identity + PR/comment operations).
+
+- `backend/memory/*`
+  - Moorcheh namespace provisioning, vector writes/searches, context reader/writer, conflict compensation.
+
+
+## 5) Human-in-the-loop gates
+
+The backend blocks on two `asyncio.Event`s per job:
+
+- Plan gate (`awaiting_plan_approval`)
+- Final result gate (`review_ready`)
+
+These are only unblocked by corresponding review endpoints.
+
+
+## 6) Extension integration expectations
+
+The extension currently:
+
+- Authenticates user via VS Code GitHub provider (`repo`, `read:user` scopes).
+- Sends `github_token` in `POST /jobs`.
+- Polls `GET /status` every 2s.
+- Calls `GET /plan` only when status is `awaiting_plan_approval`.
+- Expects exact status strings above.
+
+Compatibility health checks:
+
+- Tries `/api/v1/health` first.
+- Falls back to `/health`.
+
+
+## 7) Security and secret handling
+
+- Runtime job state does not persist GitHub token or API keys.
+- Extension optional keys are stored in VS Code secret storage.
+- Tool runtime blocks path escape and dangerous git path flags.
+
+
+## 8) Local validation commands
+
+```bash
+python -m pytest tests/ -q
+npm --prefix vscode-extension run compile --silent
+```
+
+Current branch baseline: backend tests pass (`17`).

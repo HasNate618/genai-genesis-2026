@@ -3,8 +3,9 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { SecretManager } from './secretManager';
 import { BackendClient } from './backendClient';
+import { getGitHubAccessToken } from './githubAuth';
 
-type TabId = 'settings' | 'goal' | 'approval' | 'agents' | 'logs';
+type TabId = 'settings' | 'goal' | 'review' | 'agents' | 'logs';
 
 /**
  * Provides the AgenticArmy webview in the VS Code Activity Bar sidebar.
@@ -64,6 +65,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private async handleMessage(msg: any): Promise<void> {
     const post = (m: any) => this.view?.webview.postMessage(m);
+    const failRunStart = (text: string) => {
+      post({ command: 'notification', type: 'error', text });
+      post({ command: 'runStartFailed' });
+    };
 
     switch (msg.command) {
       case 'saveKeys':
@@ -76,51 +81,67 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         break;
 
       case 'startRun': {
-        const keys = await this.secretManager.getAll();
-        if (!keys.gemini) {
-          post({ command: 'notification', type: 'error', text: 'Add your Gemini key in Settings first.' });
-          return;
-        }
-        const alive = await this.backendClient.ping();
-        if (!alive) {
-          post({ command: 'notification', type: 'error', text: 'Backend offline. Start python main.py on port 8000.' });
-          return;
-        }
         try {
+          const githubToken = await getGitHubAccessToken();
+          const alive = await this.backendClient.ping();
+          if (!alive) {
+            failRunStart('Backend offline. Start python main.py on port 8000.');
+            return;
+          }
+          const keys = await this.secretManager.getAll();
           const { job_id } = await this.backendClient.startJob({
             goal: msg.goal,
-            coderCount: msg.coderCount,
+            coderCount: Number(msg.coderCount) || 2,
+            githubToken,
+            githubRepo: '',
+            baseBranch: 'main',
             geminiKey: keys.gemini,
-            moorchehKey: keys.moorcheh ?? '',
+            moorchehKey: keys.moorcheh,
           });
           this.currentJobId = job_id;
           post({ command: 'runStarted', jobId: job_id });
           this.startPolling(job_id);
         } catch (err: any) {
-          post({ command: 'notification', type: 'error', text: `Failed: ${err.message}` });
+          failRunStart(`Failed: ${err?.message ?? String(err)}`);
         }
         break;
       }
 
       case 'reviewPlan':
         if (this.currentJobId) {
-          await this.backendClient.reviewPlan(this.currentJobId, msg.approved, msg.feedback);
-          post({
-            command: 'notification',
-            type: 'success',
-            text: msg.approved ? 'Plan approved ✓' : 'Feedback sent',
-          });
+          try {
+            await this.backendClient.reviewPlan(this.currentJobId, msg.approved, msg.feedback);
+            post({
+              command: 'notification',
+              type: 'success',
+              text: msg.approved ? 'Plan approved ✓' : 'Feedback sent',
+            });
+          } catch (err: any) {
+            post({
+              command: 'notification',
+              type: 'error',
+              text: `Plan review failed: ${err?.message ?? String(err)}`,
+            });
+          }
         }
         break;
 
       case 'reviewResult':
         if (this.currentJobId) {
-          await this.backendClient.reviewResult(this.currentJobId, msg.approved, msg.feedback);
-          post({
-            command: 'notification',
-            type: 'success',
-            text: msg.approved ? 'PR approved ✓' : 'Feedback sent',
-          });
+          try {
+            await this.backendClient.reviewResult(this.currentJobId, msg.approved, msg.feedback);
+            post({
+              command: 'notification',
+              type: 'success',
+              text: msg.approved ? 'PR approved ✓' : 'Feedback sent',
+            });
+          } catch (err: any) {
+            post({
+              command: 'notification',
+              type: 'error',
+              text: `Result review failed: ${err?.message ?? String(err)}`,
+            });
+          }
         }
         break;
 
@@ -135,13 +156,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private startPolling(jobId: string): void {
     this.stopPolling();
     let lastStatus = '';
+    let cachedPlan: string | undefined;
     this.pollInterval = setInterval(async () => {
       try {
         const statusObj = await this.backendClient.getStatus(jobId);
-        let planPayload = undefined;
-        if (statusObj.status === 'awaiting_plan_approval' && lastStatus !== 'awaiting_plan_approval') {
-          const planData = await this.backendClient.getPlan(jobId);
-          planPayload = planData.plan;
+
+        let planPayload: string | undefined;
+        if (statusObj.status === 'awaiting_plan_approval') {
+          if (lastStatus !== 'awaiting_plan_approval' || !cachedPlan) {
+            try {
+              const planData = await this.backendClient.getPlan(jobId);
+              cachedPlan = planData.plan;
+            } catch {
+              // Keep polling status even when the plan endpoint is temporarily unavailable.
+            }
+          }
+          planPayload = cachedPlan;
         }
         lastStatus = statusObj.status;
 
