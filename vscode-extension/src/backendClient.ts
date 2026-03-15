@@ -11,6 +11,7 @@ export interface JobStatus {
   status: string;
   logs: string[];
   agentStates: Record<string, 'idle' | 'running' | 'done' | 'error'>;
+  agentResults: Record<string, string>;
 }
 
 export interface PlanStatus {

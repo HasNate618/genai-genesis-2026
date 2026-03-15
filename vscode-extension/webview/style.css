@@ -47,6 +47,8 @@ html, body {
   background: var(--bg);
   height: 100%;
   overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ── App shell ───────────────────────────────────────────────────── */
@@ -56,6 +58,7 @@ html, body {
   justify-content: space-between;
   padding: 12px 14px 10px;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .logo {
@@ -115,6 +118,7 @@ html, body {
   overflow-x: auto;
   scrollbar-width: none;
   background: var(--bg-surface);
+  flex-shrink: 0;
 }
 .tab-bar::-webkit-scrollbar { display: none; }
 
@@ -144,6 +148,7 @@ html, body {
   font-size: 11.5px;
   font-weight: 500;
   text-align: center;
+  flex-shrink: 0;
 }
 .notification.success { background: rgba(48,209,88,0.12); color: var(--success); border-bottom: 1px solid rgba(48,209,88,0.2); }
 .notification.error   { background: rgba(255,69,58,0.12);  color: var(--danger);  border-bottom: 1px solid rgba(255,69,58,0.2); }
@@ -154,8 +159,15 @@ html, body {
   display: none;
   padding: 14px;
   animation: fadeIn 0.12s ease;
+  overflow-y: auto;
 }
-.panel.active { display: block; }
+.panel.active { display: flex; flex-direction: column; }
+
+/* Full-height panels that fill available space */
+.panel-fill.active {
+  flex: 1;
+  min-height: 0;
+}
 
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(3px); }
@@ -170,9 +182,10 @@ html, body {
   letter-spacing: 0.08em;
   color: var(--text-muted);
   margin-bottom: 10px;
+  flex-shrink: 0;
 }
 
-/* ── Form rows — label left, input right (like reference image) ──── */
+/* ── Form rows — label left, input right ──────────────────────── */
 .field-row {
   display: flex;
   align-items: center;
@@ -234,7 +247,7 @@ textarea {
   min-height: 90px;
 }
 
-/* ── Segmented control — like "Global / Workspace" in ref image ──── */
+/* ── Segmented control ─────────────────────────────────────────── */
 .seg-control {
   display: flex;
   background: var(--bg-input);
@@ -385,8 +398,10 @@ textarea {
 }
 .badge-idle    { background: rgba(142,142,147,0.15); color: var(--text-muted); }
 .badge-running { background: rgba(255,214,10,0.15);  color: var(--warning); animation: pulse 1.4s infinite; }
+.badge-waiting_review { background: rgba(10,132,255,0.15); color: var(--accent); animation: pulse 1.8s infinite; }
 .badge-done    { background: rgba(48,209,88,0.15);   color: var(--success); }
 .badge-error   { background: rgba(255,69,58,0.15);   color: var(--danger); }
+.badge-failed  { background: rgba(255,69,58,0.15);   color: var(--danger); }
 
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.45} }
 
@@ -449,27 +464,133 @@ textarea {
   margin-top: 10px;
 }
 
-/* ── Agent grid ──────────────────────────────────────────────────── */
-.agent-grid { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+/* ── Agent accordion ─────────────────────────────────────────────── */
+.agent-accordion {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
 
 .agent-card {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 11px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   transition: border-color var(--transition);
+  overflow: hidden;
 }
 .agent-card.running { border-color: rgba(255,214,10,0.4); }
 .agent-card.done    { border-color: rgba(48,209,88,0.4); }
 .agent-card.error   { border-color: rgba(255,69,58,0.4); }
+.agent-card.failed  { border-color: rgba(255,69,58,0.4); }
+.agent-card.waiting_review { border-color: rgba(10,132,255,0.4); }
+
+/* ── Agent header (clickable) ────────────────────────────────────── */
+.agent-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--transition);
+}
+.agent-header:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+.agent-chevron {
+  font-size: 9px;
+  color: var(--text-dim);
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+}
+.agent-chevron.expanded {
+  transform: rotate(90deg);
+}
 
 .agent-icon { font-size: 18px; flex-shrink: 0; }
 .agent-info { flex: 1; min-width: 0; }
 .agent-name { font-weight: 700; font-size: 12px; }
 .agent-role { font-size: 10.5px; color: var(--text-muted); }
+
+/* ── Agent result body (expandable) ──────────────────────────────── */
+.agent-result-body {
+  border-top: 1px solid var(--border);
+  background: #1a1a1c;
+  overflow: hidden;
+  transition: max-height 0.25s ease;
+}
+.agent-result-body.hidden {
+  display: none;
+}
+
+.agent-result-content {
+  padding: 10px 12px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text);
+  max-height: 240px;
+  overflow-y: auto;
+  resize: vertical;
+  min-height: 60px;
+}
+
+.agent-result-empty {
+  color: var(--text-dim);
+  font-style: italic;
+  font-size: 11px;
+}
+
+/* Markdown-like rendering inside result bodies */
+.agent-result-content h1 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  margin: 0 0 6px 0;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.agent-result-content h2 {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 8px 0 4px 0;
+}
+.agent-result-content h3 {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin: 6px 0 3px 0;
+}
+.agent-result-content p {
+  margin: 4px 0;
+}
+.agent-result-content ul {
+  margin: 4px 0;
+  padding-left: 16px;
+}
+.agent-result-content li {
+  margin: 2px 0;
+  line-height: 1.6;
+}
+.agent-result-content code {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--accent);
+}
+.agent-result-content strong {
+  font-weight: 700;
+  color: var(--text);
+}
 
 /* ── Pipeline status bar ─────────────────────────────────────────── */
 .pipeline-bar {
@@ -481,6 +602,7 @@ textarea {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-size: 11.5px;
+  flex-shrink: 0;
 }
 .pipeline-label { color: var(--text-muted); font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; }
 
@@ -490,6 +612,7 @@ textarea {
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
+  flex-shrink: 0;
 }
 .log-count { font-size: 11px; color: var(--text-dim); flex: 1; }
 
@@ -502,11 +625,12 @@ textarea {
   font-size: 11px;
   line-height: 1.65;
   color: #c7c7cc;
-  min-height: 280px;
-  max-height: 60vh;
+  flex: 1;
+  min-height: 120px;
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-all;
+  resize: vertical;
 }
 .log-placeholder { color: var(--text-dim); }
 
