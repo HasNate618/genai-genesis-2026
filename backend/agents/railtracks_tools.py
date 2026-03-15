@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -137,19 +138,79 @@ def build_tool_nodes(
 
         args = workspace.validate_command(command)
         run_cwd = workspace.resolve_command_cwd(cwd, agent_id=agent_id)
-        result = subprocess.run(
+
+        # Determine the maximum amount of output to buffer per stream. Fall back to a
+        # reasonable default if the workspace does not expose a max_output_bytes setting.
+        max_output_chars = getattr(workspace, "max_output_bytes", 1_000_000)
+
+        process = subprocess.Popen(
             args,
             cwd=str(run_cwd),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=workspace.command_timeout_seconds,
-            check=False,
         )
+
+        stdout_chunks: list[str] = []
+        stderr_chunks: list[str] = []
+        stdout_len = 0
+        stderr_len = 0
+
+        def _reader(pipe, chunks: list[str], length_ref: list[int]) -> None:
+            # length_ref is a single-element list used to keep track of total length
+            try:
+                for chunk in iter(lambda: pipe.read(4096), ""):
+                    if length_ref[0] >= max_output_chars:
+                        break
+                    remaining = max_output_chars - length_ref[0]
+                    if len(chunk) > remaining:
+                        chunk = chunk[:remaining]
+                    chunks.append(chunk)
+                    length_ref[0] += len(chunk)
+                    if length_ref[0] >= max_output_chars:
+                        break
+            finally:
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
+
+        stdout_len_ref = [stdout_len]
+        stderr_len_ref = [stderr_len]
+
+        stdout_thread = threading.Thread(
+            target=_reader, args=(process.stdout, stdout_chunks, stdout_len_ref), daemon=True
+        )
+        stderr_thread = threading.Thread(
+            target=_reader, args=(process.stderr, stderr_chunks, stderr_len_ref), daemon=True
+        )
+
+        stdout_thread.start()
+        stderr_thread.start()
+
+        try:
+            # Preserve timeout behavior similar to subprocess.run(..., timeout=...).
+            process.wait(timeout=workspace.command_timeout_seconds)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            # Ensure threads finish reading whatever is left in the pipes.
+            stdout_thread.join()
+            stderr_thread.join()
+            # Re-raise to match the original behavior where subprocess.run would raise.
+            raise
+
+        # Ensure all output has been read.
+        stdout_thread.join()
+        stderr_thread.join()
+
+        stdout_str = "".join(stdout_chunks)
+        stderr_str = "".join(stderr_chunks)
+
         return {
-            "exit_code": result.returncode,
+            "exit_code": process.returncode,
             "cwd": workspace.display_path(run_cwd),
-            "stdout": workspace.truncate_output(result.stdout),
-            "stderr": workspace.truncate_output(result.stderr),
+            "stdout": workspace.truncate_output(stdout_str),
+            "stderr": workspace.truncate_output(stderr_str),
         }
 
     base_tools = [read_file, glob_files, grep_files]
