@@ -27,8 +27,6 @@ const savedKeysList = $('saved-keys-list');
 
 // Goal
 const goalInput = $('goal-input');
-const coderSlider = $('coder-count');
-const coderDisplay = $('coder-count-display');
 const launchBtn = $('launch-btn');
 const jobInfo = $('job-info');
 const jobIdDisplay = $('job-id-display');
@@ -132,9 +130,6 @@ function createKeyItem(name, keyId) {
 }
 
 // ── Goal ──────────────────────────────────────────────────────────
-coderSlider.addEventListener('input', () => {
-  coderDisplay.textContent = coderSlider.value;
-});
 
 launchBtn.addEventListener('click', () => {
   const goal = goalInput.value.trim();
@@ -144,7 +139,7 @@ launchBtn.addEventListener('click', () => {
   vscode.postMessage({
     command: 'startRun',
     goal,
-    coderCount: parseInt(coderSlider.value, 10),
+    coderCount: 2,
   });
 });
 
@@ -296,6 +291,7 @@ $('scroll-bottom-btn').addEventListener('click', () => {
 // ── Agent state helpers ───────────────────────────────────────────
 const AGENT_MAP = {
   planner: 'agent-planner', 
+  coordinator: 'agent-coordinator',
   conflict_manager: 'agent-conflict-manager',
   coder: 'agent-coder', 
   verification: 'agent-verification'
@@ -304,7 +300,7 @@ const AGENT_MAP = {
 const STAGE_AGENT = {
   planning: 'planner', 
   awaiting_plan_approval: 'planner',
-  coordinating: 'conflict_manager', 
+  coordinating: 'coordinator', 
   coding: 'coder', 
   verifying: 'verification', 
   review_ready: 'verification'
@@ -339,7 +335,7 @@ function applyStatus(status, planPayload) {
 
   const active = STAGE_AGENT[status.status];
   if (active) {
-    const order = ['planner', 'conflict_manager', 'coder', 'verification'];
+    const order = ['planner', 'coordinator', 'conflict_manager', 'coder', 'verification'];
     const idx = order.indexOf(active);
     order.forEach((a, i) => setAgentState(a, i < idx ? 'done' : i === idx ? 'running' : 'idle'));
   }

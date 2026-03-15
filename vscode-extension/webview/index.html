@@ -100,15 +100,6 @@
 
     <hr class="divider" />
 
-    <!-- Coder count -->
-    <div class="field-row">
-      <div class="field-label">Coders</div>
-      <div class="slider-row" style="flex:1">
-        <input type="range" id="coder-count" class="slider" min="1" max="8" value="2" style="flex:1" />
-        <span class="slider-val" id="coder-count-display">2</span>
-      </div>
-    </div>
-
     <button class="btn btn-primary btn-full mt-8" id="launch-btn">
       🚀 Launch Agents
     </button>
@@ -195,6 +186,24 @@
         </div>
         <div class="agent-result-body hidden" id="agent-result-planner">
           <div class="agent-result-content" id="agent-result-content-planner">
+            <span class="agent-result-empty">No results yet.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Coordinator -->
+      <div class="agent-card" id="agent-coordinator" data-agent="coordinator">
+        <div class="agent-header" id="agent-header-coordinator">
+          <span class="agent-chevron" id="chevron-coordinator">▶</span>
+          <div class="agent-icon">📋</div>
+          <div class="agent-info">
+            <div class="agent-name">Coordinator</div>
+            <div class="agent-role">Breaks plan into tasks</div>
+          </div>
+          <span class="badge badge-idle">Idle</span>
+        </div>
+        <div class="agent-result-body hidden" id="agent-result-coordinator">
+          <div class="agent-result-content" id="agent-result-content-coordinator">
             <span class="agent-result-empty">No results yet.</span>
           </div>
         </div>
