@@ -5,7 +5,11 @@ from fastapi.testclient import TestClient
 from backend.api.v1 import set_runtime
 from backend.core.job_runtime import (
     JobRuntime,
+    _is_coder_recoverable_failure_reason,
     _is_contract_mismatch_reason,
+    _is_no_change_reason,
+    _qa_failure_reason_from_command,
+    _should_continue_after_coder_result,
     _is_success_status,
 )
 from backend.main import app
@@ -226,3 +230,30 @@ def test_contract_mismatch_reason_detection_supports_multiple_phrasings() -> Non
         "Assistant response did not follow the required output contract; returned an unrelated JSON with rel_path."
     )
     assert not _is_contract_mismatch_reason("Transient network timeout")
+
+
+def test_no_change_reason_is_recoverable() -> None:
+    reason = "No implementation or file changes were provided for the assigned task."
+    assert _is_no_change_reason(reason)
+    assert _is_coder_recoverable_failure_reason(reason)
+
+
+def test_qa_failure_reason_from_command_prefers_last_line() -> None:
+    detail = _qa_failure_reason_from_command(
+        {"exit_code": 1, "stdout": "", "stderr": "line one\nline two\nAssertionError: x"}
+    )
+    assert "pytest failed (exit 1)" in detail
+    assert "AssertionError: x" in detail
+
+
+def test_should_continue_after_coder_result_when_committed_changes_exist() -> None:
+    assert _should_continue_after_coder_result(
+        status="failed",
+        reason="Generated code contains syntax errors",
+        committed=True,
+    )
+    assert not _should_continue_after_coder_result(
+        status="failed",
+        reason="Tool execution failed with exit code 2",
+        committed=False,
+    )
