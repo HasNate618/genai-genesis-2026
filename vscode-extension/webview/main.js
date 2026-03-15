@@ -9,6 +9,7 @@ let pendingHitL2 = false;
 let isGeminiSet = false;
 let isMoorchehSet = false;
 let lastArtifactSignature = '';
+let currentWorkspacePath = '';
 
 // ── DOM refs ──────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -129,6 +130,27 @@ function createKeyItem(name, keyId) {
   return div;
 }
 
+// ── Repo path ─────────────────────────────────────────────────────
+const repoPathDisplay = $('repo-path-display');
+const browseRepoBtn = $('browse-repo-btn');
+
+function setRepoPath(p) {
+  currentWorkspacePath = p || '';
+  if (currentWorkspacePath) {
+    repoPathDisplay.textContent = currentWorkspacePath;
+    repoPathDisplay.title = currentWorkspacePath;
+    repoPathDisplay.classList.remove('unset');
+  } else {
+    repoPathDisplay.textContent = 'No workspace open';
+    repoPathDisplay.title = '';
+    repoPathDisplay.classList.add('unset');
+  }
+}
+
+browseRepoBtn.addEventListener('click', () => {
+  vscode.postMessage({ command: 'browseFolder' });
+});
+
 // ── Goal ──────────────────────────────────────────────────────────
 coderSlider.addEventListener('input', () => {
   coderDisplay.textContent = coderSlider.value;
@@ -137,12 +159,14 @@ coderSlider.addEventListener('input', () => {
 launchBtn.addEventListener('click', () => {
   const goal = goalInput.value.trim();
   if (!goal) { showNotification('Please enter a goal.', 'error'); return; }
+  if (!currentWorkspacePath) { showNotification('Select a target repo first.', 'error'); return; }
   launchBtn.disabled = true;
   launchBtn.textContent = 'Launching…';
   vscode.postMessage({
     command: 'startRun',
     goal,
     coderCount: parseInt(coderSlider.value, 10),
+    workspacePath: currentWorkspacePath,
   });
 });
 
@@ -329,6 +353,10 @@ window.addEventListener('message', ({ data: msg }) => {
       updateSavedKeysList(msg.geminiKeySet, msg.moorchehKeySet);
       break;
 
+    case 'workspacePath':
+      setRepoPath(msg.path);
+      break;
+
     case 'notification':
       showNotification(msg.text, msg.type); break;
 
@@ -364,3 +392,4 @@ window.addEventListener('message', ({ data: msg }) => {
 
 // ── Init ──────────────────────────────────────────────────────────
 switchTab('settings');
+setRepoPath(window.__WORKSPACE_PATH__ || '');

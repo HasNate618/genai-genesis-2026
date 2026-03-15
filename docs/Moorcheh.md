@@ -215,7 +215,8 @@ Notes:
   "moorcheh_key": "",
   "github_token": "gho_...",
   "github_repo": "owner/repo",
-  "base_branch": "main"
+  "base_branch": "main",
+  "workspace_path": "/absolute/path/to/target/repo"
 }
 ```
 
@@ -224,6 +225,7 @@ Notes:
 - `goal` is required.
 - `gemini_key` and `moorcheh_key` are backward-compatible fields.
 - GitHub token comes from VS Code auth flow.
+- `workspace_path` pins execution to the intended local repo root; if omitted, backend falls back to its own cwd.
 - If `github_repo` is empty and git remote is configured, runtime derives repo from `origin`.
 
 
@@ -494,6 +496,14 @@ If you see repeated coder loopbacks with messages like:
 - `No implementation outcome was provided by the coding agent`
 
 runtime now treats this as recoverable contract noise and, for simple Python goals, applies deterministic fallback file creation (`hello_world.py`) so a real artifact is produced.
+
+If you see:
+
+- `fatal: invalid reference: main`
+
+the target repo likely does not have a local `main` branch. Runtime now auto-falls back to the repo's current local branch when `base_branch` is missing.
+
+If the target repo is newly initialized and has no commits, runtime now bootstraps an initial empty commit so git worktree operations can proceed.
 
 If you see:
 

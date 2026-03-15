@@ -58,6 +58,12 @@ export class PanelManager {
       this.context.subscriptions
     );
 
+    this.sendWorkspacePath();
+
+    this.context.subscriptions.push(
+      vscode.workspace.onDidChangeWorkspaceFolders(() => this.sendWorkspacePath())
+    );
+
     this.panel.onDidDispose(() => {
       this.dispose();
     });
@@ -79,6 +85,11 @@ export class PanelManager {
     });
   }
 
+  private sendWorkspacePath(): void {
+    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+    this.panel?.webview.postMessage({ command: 'workspacePath', path: workspacePath });
+  }
+
   private async handleMessage(msg: any): Promise<void> {
     const post = (payload: any) => this.panel?.webview.postMessage(payload);
     const failRunStart = (text: string) => {
@@ -96,6 +107,20 @@ export class PanelManager {
         post({ command: 'notification', type: 'success', text: 'API keys saved securely ✓' });
         break;
 
+      case 'browseFolder': {
+        const uris = await vscode.window.showOpenDialog({
+          canSelectFolders: true,
+          canSelectFiles: false,
+          canSelectMany: false,
+          openLabel: 'Select Target Repo',
+          title: 'Select the repo the agents should work on',
+        });
+        if (uris && uris.length > 0) {
+          post({ command: 'workspacePath', path: uris[0].fsPath });
+        }
+        break;
+      }
+
       case 'startRun': {
         try {
           const githubToken = await getGitHubAccessToken();
@@ -107,6 +132,13 @@ export class PanelManager {
           }
 
           const keys = await this.secretManager.getAll();
+          const activeWorkspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+          const requestedWorkspacePath = typeof msg.workspacePath === 'string' ? msg.workspacePath.trim() : '';
+          const workspacePath = requestedWorkspacePath || activeWorkspacePath;
+          if (!workspacePath || !fs.existsSync(workspacePath) || !fs.statSync(workspacePath).isDirectory()) {
+            failRunStart('Open a target workspace folder before launching.');
+            return;
+          }
           const { job_id } = await this.backendClient.startJob({
             goal: msg.goal,
             coderCount: Number(msg.coderCount) || 2,
@@ -115,6 +147,7 @@ export class PanelManager {
             baseBranch: 'main',
             geminiKey: keys.gemini,
             moorchehKey: keys.moorcheh,
+            workspacePath,
           });
           this.currentJobId = job_id;
           post({ command: 'runStarted', jobId: job_id });

@@ -19,7 +19,7 @@ from backend.agents.railtracks_runtime import (
     RailtracksWorkflowRuntime,
 )
 from backend.config import Settings
-from backend.core.github_runtime import GitHubRuntime, GitHubRuntimeError
+from backend.core.github_runtime import GitHubRuntime
 from backend.core.tool_runtime import WorkspaceToolRuntime
 from backend.core.workdir_runtime import WorkdirContext, WorkdirRuntime, WorkdirRuntimeError
 from backend.memory.conflict_context import ConflictCompensator, TaskDraft
@@ -200,7 +200,9 @@ class JobRuntime:
         loop_reason = ""
         coordination_attempt = 0
         conflict_retry_count = 0
+        coder_fail_count = 0
         simple_python_target = _detect_simple_python_target(request.goal)
+        effective_base_branch = request.base_branch
 
         coder_outputs: list[dict] = []
         coder_branches: list[str] = []
@@ -212,6 +214,24 @@ class JobRuntime:
 
             hooks = await asyncio.to_thread(self._memory_factory, request)
             if hooks is not None:
+                resolved_base = await asyncio.to_thread(
+                    hooks.workdirs.resolve_base_branch,
+                    request.base_branch,
+                )
+                effective_base_branch = resolved_base
+                await self._append_log(
+                    job_id,
+                    f"Using workspace repo root: {hooks.workdirs.repo_root}",
+                )
+                if resolved_base != request.base_branch:
+                    await self._append_log(
+                        job_id,
+                        (
+                            f"Requested base branch '{request.base_branch}' not found; "
+                            f"using '{resolved_base}' instead."
+                        ),
+                    )
+                await self._set_artifacts(job_id, base_branch=effective_base_branch)
                 await asyncio.to_thread(
                     hooks.writer.write_goal,
                     workflow_id=job_id,
@@ -221,6 +241,14 @@ class JobRuntime:
                 if hooks.github_runtime is not None:
                     identity = await asyncio.to_thread(hooks.github_runtime.whoami)
                     await self._append_log(job_id, f"GitHub connected as @{identity.login}.")
+                elif request.github_token:
+                    await self._append_log(
+                        job_id,
+                        (
+                            "GitHub token provided but repo could not be resolved from workspace. "
+                            "Continuing without GitHub integration."
+                        ),
+                    )
             if simple_python_target:
                 await self._append_log(
                     job_id,
@@ -333,7 +361,11 @@ class JobRuntime:
                         "coordinator_conflict",
                         coordinator_out.model_dump_json(indent=2),
                     )
-                    draft_tasks = _tasks_from_assignments(coordinator_out, request.coder_count)
+                    draft_tasks = _tasks_from_assignments(
+                        coordinator_out,
+                        request.coder_count,
+                        goal=request.goal,
+                    )
                 else:
                     draft_tasks = _draft_tasks(request.coder_count)
 
@@ -421,6 +453,23 @@ class JobRuntime:
                         )
 
                 await self._set_tasks(job_id, adjusted_tasks)
+
+                # After repeated coder failures, collapse to a single primary .py
+                # file so the coordinator's multi-file plan can't keep blocking progress.
+                if coder_fail_count >= 2 and not simple_python_target:
+                    forced_target = _extract_primary_py_target(adjusted_tasks, request.goal)
+                    if forced_target:
+                        simple_python_target = forced_target
+                        adjusted_tasks = _simple_python_goal_tasks(forced_target)
+                        await self._set_tasks(job_id, adjusted_tasks)
+                        await self._append_log(
+                            job_id,
+                            (
+                                f"Escalating to deterministic single-file mode after "
+                                f"{coder_fail_count} consecutive coder failures: {forced_target}"
+                            ),
+                        )
+
                 await self._sleep_tick()
 
                 # -------------------- Coding --------------------
@@ -467,7 +516,7 @@ class JobRuntime:
                             hooks.workdirs.prepare_agent_workdir,
                             job_id=job_id,
                             agent_id=task.agent_id,
-                            base_branch=request.base_branch,
+                            base_branch=effective_base_branch,
                         )
                         tool_runtime = WorkspaceToolRuntime(
                             root=context.path,
@@ -491,36 +540,63 @@ class JobRuntime:
 
                         coder_status = str(coder_out.status).strip().lower()
                         coder_reason = str(coder_out.next_action_reason)
-                        if simple_python_target and not committed:
-                            fallback_path = await asyncio.to_thread(
-                                _apply_simple_python_fallback,
-                                tool_runtime,
-                                simple_python_target,
-                            )
-                            if fallback_path:
-                                coder_out.status = "completed"
-                                coder_out.changed_files = [fallback_path]
-                                if not coder_out.patch_summary:
-                                    coder_out.patch_summary = (
-                                        f"Deterministic fallback created {fallback_path}"
-                                    )
-                                committed = await asyncio.to_thread(
-                                    hooks.workdirs.commit_all,
-                                    context,
-                                    message=f"{task.task_id}: deterministic fallback {fallback_path}",
+                        fallback_paths: list[str] = []
+                        if not committed:
+                            if simple_python_target:
+                                fallback_path = await asyncio.to_thread(
+                                    _apply_simple_python_fallback,
+                                    tool_runtime,
+                                    simple_python_target,
                                 )
-                                if committed and context.branch not in coder_branches:
-                                    coder_branches.append(context.branch)
-                                if committed:
-                                    await self._append_log(
-                                        job_id,
-                                        (
-                                            f"Applied deterministic fallback for {task.task_id} "
-                                            f"and committed {fallback_path}."
-                                        ),
+                                if fallback_path:
+                                    fallback_paths = [fallback_path]
+                            elif _should_attempt_task_fallback(
+                                status=coder_status,
+                                reason=coder_reason,
+                                task_files=task.file_paths,
+                            ):
+                                fallback_paths = await asyncio.to_thread(
+                                    _apply_task_file_fallback,
+                                    tool_runtime,
+                                    task.file_paths,
+                                )
+
+                        if fallback_paths:
+                            coder_out.status = "completed"
+                            coder_out.changed_files = _unique_non_empty(
+                                [*(coder_out.changed_files or []), *fallback_paths]
+                            )
+                            if not coder_out.patch_summary:
+                                if len(fallback_paths) == 1:
+                                    coder_out.patch_summary = (
+                                        f"Deterministic fallback created {fallback_paths[0]}"
                                     )
-                                    coder_status = "completed"
-                                    coder_reason = ""
+                                else:
+                                    coder_out.patch_summary = (
+                                        f"Deterministic fallback created {len(fallback_paths)} files."
+                                    )
+                            commit_hint = (
+                                fallback_paths[0]
+                                if len(fallback_paths) == 1
+                                else f"{len(fallback_paths)} files"
+                            )
+                            committed = await asyncio.to_thread(
+                                hooks.workdirs.commit_all,
+                                context,
+                                message=f"{task.task_id}: deterministic fallback {commit_hint}",
+                            )
+                            if committed and context.branch not in coder_branches:
+                                coder_branches.append(context.branch)
+                            if committed:
+                                await self._append_log(
+                                    job_id,
+                                    (
+                                        f"Applied deterministic fallback for {task.task_id} "
+                                        f"and committed {commit_hint}."
+                                    ),
+                                )
+                                coder_status = "completed"
+                                coder_reason = ""
 
                         if _should_continue_after_coder_result(
                             status=coder_status,
@@ -581,12 +657,15 @@ class JobRuntime:
                 await self._set_agent_result(job_id, "coder", json_safe_dump(coder_outputs))
 
                 if coding_failed:
+                    coder_fail_count += 1
                     continue
                 if hooks is not None and not coder_branches:
+                    coder_fail_count += 1
                     loop_source = "manual_retry"
                     loop_reason = "No committed work product was produced during coding."
                     await self._append_log(job_id, f"Task failed. Returning to coordination: {loop_reason}")
                     continue
+                coder_fail_count = 0
                 changed_files = sorted(
                     {
                         file_path
@@ -608,7 +687,7 @@ class JobRuntime:
                         verification_context = await asyncio.to_thread(
                             hooks.workdirs.prepare_verification_workdir,
                             job_id=job_id,
-                            base_branch=request.base_branch,
+                            base_branch=effective_base_branch,
                             branches=mergeable_branches,
                         )
                         verification_workspace = str(verification_context.path)
@@ -748,12 +827,12 @@ class JobRuntime:
                         if branches:
                             await asyncio.to_thread(
                                 hooks.workdirs.merge_branches,
-                                base_branch=request.base_branch,
+                                base_branch=effective_base_branch,
                                 branches=branches,
                             )
                             merged_commit = await asyncio.to_thread(
                                 hooks.workdirs.head_commit,
-                                request.base_branch,
+                                effective_base_branch,
                             )
                             merged_files = await asyncio.to_thread(
                                 hooks.workdirs.changed_files_in_ref,
@@ -768,7 +847,7 @@ class JobRuntime:
                             await self._append_log(
                                 job_id,
                                 (
-                                    f"Merged branches into {request.base_branch}: {', '.join(branches)} "
+                                    f"Merged branches into {effective_base_branch}: {', '.join(branches)} "
                                     f"(commit {merged_commit[:12]})"
                                 ),
                             )
@@ -847,13 +926,25 @@ class JobRuntime:
         reader = WorkflowContextReader(store)
         compensator = ConflictCompensator(settings=settings)
         executor = RailtracksWorkflowRuntime(settings=settings)
-        repo_root = Path(request.workspace_path) if request.workspace_path else Path.cwd()
+        if request.workspace_path:
+            repo_root = Path(request.workspace_path).expanduser()
+            if not repo_root.exists():
+                raise JobRuntimeError(f"workspace_path does not exist: {request.workspace_path}")
+            if not repo_root.is_dir():
+                raise JobRuntimeError(f"workspace_path is not a directory: {request.workspace_path}")
+            repo_root = repo_root.resolve()
+        else:
+            repo_root = Path.cwd()
         workdirs = WorkdirRuntime(repo_root=repo_root)
 
         github_runtime: GitHubRuntime | None = None
         if request.github_token:
-            repo_name = request.github_repo or workdirs.detect_repo_full_name()
-            github_runtime = GitHubRuntime(access_token=request.github_token, repo_full_name=repo_name)
+            repo_name = _resolve_github_repo_name(request.github_repo, workdirs)
+            if repo_name:
+                github_runtime = GitHubRuntime(
+                    access_token=request.github_token,
+                    repo_full_name=repo_name,
+                )
 
         return JobExecutionHooks(
             writer=writer,
@@ -915,6 +1006,7 @@ class JobRuntime:
         self,
         job_id: str,
         *,
+        base_branch: str | None = None,
         changed_files: list[str] | None = None,
         merged_branches: list[str] | None = None,
         merged_commit: str | None = None,
@@ -926,6 +1018,8 @@ class JobRuntime:
             artifacts = dict(job.get("artifacts", {}))
             existing_changed = list(artifacts.get("changed_files", []))
             existing_branches = list(artifacts.get("merged_branches", []))
+            if base_branch is not None:
+                artifacts["base_branch"] = str(base_branch).strip() or artifacts.get("base_branch", "main")
             if changed_files:
                 artifacts["changed_files"] = _unique_non_empty(existing_changed + changed_files)
             if merged_branches:
@@ -1036,12 +1130,24 @@ def _draft_tasks(coder_count: int) -> list[TaskDraft]:
     return tasks
 
 
-def _tasks_from_assignments(coordinator: CoordinatorOutput, coder_count: int) -> list[TaskDraft]:
+def _tasks_from_assignments(
+    coordinator: CoordinatorOutput, coder_count: int, *, goal: str = ""
+) -> list[TaskDraft]:
     tasks: list[TaskDraft] = []
+    python_package = _infer_python_package_slug(goal)
     for index, assignment in enumerate(coordinator.assignments):
-        files = assignment.predicted_files or []
+        files = _normalize_task_paths(assignment.predicted_files or [])
         if not files:
-            files = [f"workspace/task_{index + 1}.txt"]
+            files = _extract_paths_from_text(f"{assignment.task_summary}\n{assignment.rationale}")
+        if not files:
+            files = _infer_task_paths_from_summary(
+                task_summary=assignment.task_summary,
+                goal=goal,
+                python_package=python_package,
+                index=index,
+            )
+        if not files:
+            files = [f"task_{index + 1}.txt"]
         tasks.append(
             TaskDraft(
                 task_id=assignment.task_id or f"task-{index + 1}",
@@ -1056,6 +1162,87 @@ def _tasks_from_assignments(coordinator: CoordinatorOutput, coder_count: int) ->
     if tasks:
         return tasks
     return _draft_tasks(coder_count)
+
+
+def _normalize_task_paths(paths: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for path in paths:
+        candidate = _sanitize_relative_path(path)
+        if not candidate or _is_placeholder_task_path(candidate):
+            continue
+        normalized.append(candidate)
+    return _unique_non_empty(normalized)
+
+
+def _sanitize_relative_path(path: str) -> str:
+    candidate = str(path).strip().replace("\\", "/")
+    if candidate.startswith("./"):
+        candidate = candidate[2:]
+    if not candidate or candidate.startswith("/") or candidate.startswith("~"):
+        return ""
+    if ".." in Path(candidate).parts:
+        return ""
+    return candidate
+
+
+def _is_placeholder_task_path(path: str) -> bool:
+    normalized = str(path).strip().replace("\\", "/").lower()
+    return normalized.startswith("workspace/task_") and normalized.endswith(".txt")
+
+
+def _extract_paths_from_text(text: str) -> list[str]:
+    if not text:
+        return []
+    candidates = re.findall(r"\b[A-Za-z0-9][A-Za-z0-9._/-]*\.[A-Za-z0-9_]+\b", text)
+    return _normalize_task_paths(candidates)
+
+
+def _infer_python_package_slug(goal: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", " ", goal.lower()).strip()
+    if "python" not in normalized:
+        return ""
+
+    game_match = re.search(r"\b([a-z0-9]+)\s+game\b", normalized)
+    if game_match:
+        return f"{game_match.group(1)}_game"
+
+    project_match = re.search(r"\b([a-z0-9]+)\s+(app|tool|project)\b", normalized)
+    if project_match:
+        return project_match.group(1)
+    return "app"
+
+
+def _infer_task_paths_from_summary(
+    *, task_summary: str, goal: str, python_package: str, index: int
+) -> list[str]:
+    summary = task_summary.lower()
+    inferred: list[str] = []
+
+    if "readme" in summary:
+        inferred.append("README.md")
+    if any(token in summary for token in ("requirement", "requirements", "dependency", "dependencies", "deps")):
+        inferred.append("requirements.txt")
+
+    if python_package:
+        if any(token in summary for token in ("package", "module", "init", "__init__")):
+            inferred.append(f"{python_package}/__init__.py")
+        if any(token in summary for token in ("game", "logic", "engine", "loop", "core")):
+            inferred.append(f"{python_package}/game.py")
+        if any(token in summary for token in ("render", "display", "draw", "ui")):
+            inferred.append(f"{python_package}/render.py")
+        if any(token in summary for token in ("util", "helper", "shared")):
+            inferred.append(f"{python_package}/utils.py")
+        if any(token in summary for token in ("cli", "command line", "entrypoint", "entry point")):
+            inferred.append(f"{python_package}/cli.py")
+
+    normalized = _normalize_task_paths(inferred)
+    if normalized:
+        return normalized
+
+    if python_package:
+        default_file = "game.py" if "game" in goal.lower() else "main.py"
+        return [f"{python_package}/{default_file}"]
+    return [f"task_{index + 1}.txt"]
 
 
 def _task_to_assignment_payload(task: TaskDraft) -> dict:
@@ -1077,6 +1264,7 @@ _SIMPLE_PYTHON_KEYWORDS: dict[str, str] = {
     "hello-world": "hello_world.py",
     "print hello world": "hello_world.py",
     "calculator": "calculator.py",
+    "calc": "calc.py",
     "guessing game": "guessing_game.py",
     "number game": "number_game.py",
     "todo list": "todo_list.py",
@@ -1138,6 +1326,19 @@ def _detect_simple_python_target(goal: str) -> str | None:
     return default_filename
 
 
+def _extract_primary_py_target(tasks: list[TaskDraft], goal: str) -> str | None:
+    """Return the first sanitised .py file path found across all task assignments."""
+    for task in tasks:
+        for file_path in task.file_paths:
+            candidate = _sanitize_relative_path(file_path)
+            if candidate and candidate.endswith(".py") and not _is_placeholder_task_path(candidate):
+                return candidate
+    normalized_goal = goal.lower()
+    if "python" in normalized_goal:
+        return "main.py"
+    return None
+
+
 def _simple_python_goal_tasks(file_path: str) -> list[TaskDraft]:
     return [
         TaskDraft(
@@ -1158,6 +1359,24 @@ def _apply_simple_python_fallback(
     content = _build_fallback_content(file_path)
     written = tool_runtime.write_file(file_path, content)
     return written if written else None
+
+
+def _apply_task_file_fallback(
+    tool_runtime: WorkspaceToolRuntime,
+    file_paths: list[str],
+) -> list[str]:
+    written_files: list[str] = []
+    for file_path in file_paths:
+        candidate = _sanitize_relative_path(file_path)
+        if not candidate or _is_placeholder_task_path(candidate):
+            continue
+        target = (tool_runtime.root / candidate).resolve()
+        if target.exists():
+            continue
+        written = tool_runtime.write_file(candidate, _build_fallback_content(candidate))
+        if written:
+            written_files.append(written)
+    return _unique_non_empty(written_files)
 
 
 _CALCULATOR_FALLBACK = (
@@ -1198,11 +1417,27 @@ _HELLO_WORLD_FALLBACK = (
 _FALLBACK_TEMPLATES: dict[str, str] = {
     "hello_world": _HELLO_WORLD_FALLBACK,
     "calculator": _CALCULATOR_FALLBACK,
+    "calc": _CALCULATOR_FALLBACK,
 }
 
 
 def _build_fallback_content(file_path: str) -> str:
-    stem = Path(file_path).stem
+    path = Path(file_path)
+    stem = path.stem
+    lower_name = path.name.lower()
+
+    if lower_name == "readme.md":
+        return "# Project\n\nGenerated by deterministic fallback.\n"
+    if lower_name == "requirements.txt":
+        return ""
+    if lower_name == "__init__.py":
+        return '"""Package initialization."""\n'
+    if path.suffix and path.suffix != ".py":
+        title = stem.replace("_", " ").title()
+        if path.suffix == ".md":
+            return f"# {title}\n\nGenerated by deterministic fallback.\n"
+        return f"{title}\n"
+
     if stem in _FALLBACK_TEMPLATES:
         return _FALLBACK_TEMPLATES[stem]
     title = stem.replace("_", " ").title()
@@ -1213,6 +1448,16 @@ def _build_fallback_content(file_path: str) -> str:
         'if __name__ == "__main__":\n'
         "    main()\n"
     )
+
+
+def _resolve_github_repo_name(request_repo: str, workdirs: WorkdirRuntime) -> str:
+    repo_name = str(request_repo).strip()
+    if repo_name:
+        return repo_name
+    try:
+        return workdirs.detect_repo_full_name()
+    except WorkdirRuntimeError:
+        return ""
 
 
 def _unique_non_empty(values: list[str]) -> list[str]:
@@ -1236,6 +1481,20 @@ def _should_continue_after_coder_result(*, status: str, reason: str, committed: 
         _is_success_status(status)
         or committed
         or _is_coder_recoverable_failure_reason(reason)
+    )
+
+
+def _should_attempt_task_fallback(*, status: str, reason: str, task_files: list[str]) -> bool:
+    if _is_success_status(status):
+        return any(
+            _sanitize_relative_path(path) and not _is_placeholder_task_path(path)
+            for path in task_files
+        )
+    if not _is_coder_recoverable_failure_reason(reason):
+        return False
+    return any(
+        _sanitize_relative_path(path) and not _is_placeholder_task_path(path)
+        for path in task_files
     )
 
 
@@ -1288,6 +1547,14 @@ def _is_no_outcome_reason(reason: str) -> bool:
         "cannot determine changes or patch details",
         "no implementation or file changes were provided",
         "no implementation outcome",
+        # Variants produced by different LLM phrasings
+        "no coding actions were performed",
+        "no coding was performed",
+        "implementation outcome is missing",
+        "no files were created",
+        "no files were written",
+        "no changes were made",
+        "no work was performed",
     )
     return any(pattern in normalized for pattern in patterns)
 

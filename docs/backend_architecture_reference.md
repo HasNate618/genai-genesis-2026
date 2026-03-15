@@ -60,7 +60,8 @@ Request:
   "moorcheh_key": "",
   "github_token": "",
   "github_repo": "",
-  "base_branch": "main"
+  "base_branch": "main",
+  "workspace_path": "/absolute/path/to/current/vscode/workspace"
 }
 ```
 
@@ -75,6 +76,9 @@ Notes:
 - `gemini_key` and `moorcheh_key` are backward-compatible optional fields.
 - Hosted LLM defaults are server-configured (`LLM_BASE_URL`, `LLM_MODEL`).
 - `github_token` is expected from VS Code GitHub auth when using GitHub-integrated flow.
+- `workspace_path` should be sent by the extension so workdirs/commits are created against the opened repo, not backend server cwd.
+- If `base_branch` does not exist in the target repo, runtime automatically falls back to the repo's current local branch.
+- If the target repo has no commits yet, runtime creates an initial empty commit before creating worktrees.
 
 
 ## `GET /jobs/{job_id}/plan`
@@ -160,6 +164,8 @@ Response:
   - Background pipeline and HITL event synchronization.
   - Railtracks phase calls and loopback handling.
   - Deterministic fallback for simple Python goals (`hello world`) when coder output is empty/non-usable.
+  - Assignment path hardening: coordinator outputs without concrete `predicted_files` are inferred from task summary/goal to avoid placeholder `workspace/task_*.txt` loops.
+  - Deterministic task-file fallback can scaffold missing target files when coder output is recoverable but no commit is produced.
   - Work-product invariant: merge/finalization only proceed with committed coding artifacts.
 
 - `backend/agents/railtracks_runtime.py`
@@ -197,6 +203,7 @@ The extension currently:
 
 - Authenticates user via VS Code GitHub provider (`repo`, `read:user` scopes).
 - Sends `github_token` in `POST /jobs`.
+- Sends `workspace_path` in `POST /jobs` to bind execution to the selected/opened repo path.
 - Polls `GET /status` every 2s.
 - Calls `GET /plan` only when status is `awaiting_plan_approval`.
 - Expects exact status strings above.
@@ -221,4 +228,4 @@ python -m pytest tests/ -q
 npm --prefix vscode-extension run compile --silent
 ```
 
-Current branch baseline: backend tests pass (`38`).
+Current branch baseline: backend tests pass (`48`).

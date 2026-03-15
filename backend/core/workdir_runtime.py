@@ -38,6 +38,7 @@ class WorkdirRuntime:
     def prepare_agent_workdir(
         self, *, job_id: str, agent_id: str, base_branch: str = "main"
     ) -> WorkdirContext:
+        resolved_base_branch = self.resolve_base_branch(base_branch)
         key = (job_id, agent_id)
         existing = self._contexts.get(key)
         if existing is not None and existing.path.exists():
@@ -58,7 +59,7 @@ class WorkdirRuntime:
             self._run_git(["worktree", "remove", "--force", str(path)], check=False)
             shutil.rmtree(path, ignore_errors=True)
 
-        self._run_git(["worktree", "add", "-B", branch, str(path), base_branch])
+        self._run_git(["worktree", "add", "-B", branch, str(path), resolved_base_branch])
         context = WorkdirContext(job_id=job_id, agent_id=agent_id, branch=branch, path=path)
         self._register_context(context)
         return context
@@ -66,15 +67,16 @@ class WorkdirRuntime:
     def prepare_verification_workdir(
         self, *, job_id: str, base_branch: str, branches: Iterable[str]
     ) -> WorkdirContext:
+        resolved_base_branch = self.resolve_base_branch(base_branch)
         context = self.prepare_agent_workdir(
             job_id=job_id,
             agent_id="verification",
-            base_branch=base_branch,
+            base_branch=resolved_base_branch,
         )
-        self._run_git(["-C", str(context.path), "checkout", "-B", context.branch, base_branch])
+        self._run_git(["-C", str(context.path), "checkout", "-B", context.branch, resolved_base_branch])
 
         for branch in self._normalize_branches(branches):
-            if branch in {base_branch, context.branch}:
+            if branch in {resolved_base_branch, context.branch}:
                 continue
             self._run_git(["rev-parse", "--verify", branch])
             self._run_git(["-C", str(context.path), "merge", "--no-ff", "--no-edit", branch])
@@ -108,8 +110,9 @@ class WorkdirRuntime:
         This never checks out or modifies the user's main working tree, so it
         is safe even when the repo has uncommitted changes.
         """
+        resolved_base_branch = self.resolve_base_branch(base_branch)
         branches_to_merge = [
-            branch for branch in self._normalize_branches(branches) if branch != base_branch
+            branch for branch in self._normalize_branches(branches) if branch != resolved_base_branch
         ]
         if not branches_to_merge:
             return
@@ -122,7 +125,7 @@ class WorkdirRuntime:
             shutil.rmtree(merge_dir, ignore_errors=True)
         merge_dir.parent.mkdir(parents=True, exist_ok=True)
 
-        self._run_git(["worktree", "add", "-B", merge_branch, str(merge_dir), base_branch])
+        self._run_git(["worktree", "add", "-B", merge_branch, str(merge_dir), resolved_base_branch])
         try:
             for branch in branches_to_merge:
                 self._run_git(["rev-parse", "--verify", branch])
@@ -131,7 +134,7 @@ class WorkdirRuntime:
             merged_sha = self._run_git(
                 ["-C", str(merge_dir), "rev-parse", "HEAD"]
             ).stdout.strip()
-            self._run_git(["update-ref", f"refs/heads/{base_branch}", merged_sha])
+            self._run_git(["update-ref", f"refs/heads/{resolved_base_branch}", merged_sha])
         finally:
             self._run_git(["worktree", "remove", "--force", str(merge_dir)], check=False)
             shutil.rmtree(merge_dir, ignore_errors=True)
@@ -162,6 +165,38 @@ class WorkdirRuntime:
             return https_match.group(1)
         raise WorkdirRuntimeError(f"Unable to parse GitHub repo from remote URL: {raw}")
 
+    def resolve_base_branch(self, preferred_branch: str = "main") -> str:
+        candidate = str(preferred_branch).strip()
+        if candidate and self._local_branch_exists(candidate):
+            return candidate
+
+        if not self._has_commits():
+            current_head = self._current_head_branch()
+            bootstrap_branch = candidate
+            if candidate == "main" and current_head and current_head != "HEAD":
+                bootstrap_branch = current_head
+            if not bootstrap_branch:
+                bootstrap_branch = current_head or "main"
+            return self._bootstrap_initial_branch(bootstrap_branch)
+
+        current = self._run_git(["rev-parse", "--abbrev-ref", "HEAD"], check=False).stdout.strip()
+        if current and current != "HEAD" and self._local_branch_exists(current):
+            return current
+
+        refs_output = self._run_git(
+            ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+            check=False,
+        ).stdout
+        for line in refs_output.splitlines():
+            branch = line.strip()
+            if branch:
+                return branch
+
+        raise WorkdirRuntimeError(
+            "No local branch available for worktree base. "
+            "Create an initial commit and branch in the target repository."
+        )
+
     def _register_context(self, context: WorkdirContext) -> None:
         key = (context.job_id, context.agent_id)
         self._contexts[key] = context
@@ -183,6 +218,49 @@ class WorkdirRuntime:
             seen.add(value)
             ordered.append(value)
         return ordered
+
+    def _local_branch_exists(self, branch: str) -> bool:
+        result = self._run_git(["show-ref", "--verify", f"refs/heads/{branch}"], check=False)
+        return result.returncode == 0
+
+    def _has_commits(self) -> bool:
+        result = self._run_git(["rev-parse", "--verify", "HEAD"], check=False)
+        return result.returncode == 0
+
+    def _current_head_branch(self) -> str:
+        result = self._run_git(["symbolic-ref", "--short", "HEAD"], check=False)
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    def _bootstrap_initial_branch(self, branch: str) -> str:
+        branch_name = str(branch).strip() or "main"
+        checkout = self._run_git(["checkout", "-B", branch_name], check=False)
+        if checkout.returncode != 0:
+            raise WorkdirRuntimeError(
+                "Unable to create initial branch for empty repository: "
+                f"{branch_name}\nstdout: {checkout.stdout}\nstderr: {checkout.stderr}"
+            )
+
+        commit = self._run_git(
+            [
+                "-c",
+                "user.name=AgenticArmy Bot",
+                "-c",
+                "user.email=agentic-army@local",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "Initialize repository for AgenticArmy",
+            ],
+            check=False,
+        )
+        if commit.returncode != 0:
+            raise WorkdirRuntimeError(
+                "Unable to create initial commit for empty repository.\n"
+                f"stdout: {commit.stdout}\nstderr: {commit.stderr}"
+            )
+        return branch_name
 
     def _sanitize_commit_message(self, message: str) -> str:
         compact = " ".join(part.strip() for part in message.splitlines() if part.strip())

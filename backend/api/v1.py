@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -51,6 +53,11 @@ async def create_job(payload: CreateJobRequest) -> dict[str, str]:
     if not goal:
         raise HTTPException(status_code=422, detail="goal must not be blank.")
     base_branch = payload.base_branch.strip() or "main"
+    workspace_path = payload.workspace_path.strip()
+    if workspace_path:
+        workspace_dir = Path(workspace_path).expanduser()
+        if not workspace_dir.exists() or not workspace_dir.is_dir():
+            raise HTTPException(status_code=422, detail="workspace_path must be an existing directory.")
     launch = JobLaunchRequest(
         goal=goal,
         coder_count=payload.coder_count,
@@ -59,7 +66,7 @@ async def create_job(payload: CreateJobRequest) -> dict[str, str]:
         github_token=payload.github_token.strip(),
         github_repo=payload.github_repo.strip(),
         base_branch=base_branch,
-        workspace_path=payload.workspace_path.strip(),
+        workspace_path=workspace_path,
     )
     job_id = await _runtime.create_job(launch)
     _runtime.start_pipeline(job_id, launch)

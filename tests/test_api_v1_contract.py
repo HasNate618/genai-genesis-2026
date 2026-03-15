@@ -1,20 +1,26 @@
 import time
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from backend.agents.railtracks_runtime import CoordinatorAssignment, CoordinatorOutput
 from backend.api.v1 import set_runtime
 from backend.core.job_runtime import (
     JobRuntime,
     _detect_simple_python_target,
+    _extract_primary_py_target,
     _is_coder_recoverable_failure_reason,
     _is_contract_mismatch_reason,
     _is_no_change_reason,
     _is_no_outcome_reason,
     _qa_failure_reason_from_command,
+    _resolve_github_repo_name,
     _simple_python_goal_tasks,
     _should_continue_after_coder_result,
     _is_success_status,
+    _tasks_from_assignments,
 )
+from backend.core.workdir_runtime import WorkdirRuntimeError
 from backend.main import app
 
 
@@ -178,6 +184,21 @@ def test_create_job_accepts_no_user_api_keys() -> None:
         assert payload["status"] == "awaiting_plan_approval"
 
 
+def test_create_job_rejects_invalid_workspace_path() -> None:
+    with _create_client() as client:
+        invalid_path = f"/tmp/agenticarmy-not-a-real-workspace-path-{uuid4().hex}"
+        create = client.post(
+            "/api/v1/jobs",
+            json={
+                "goal": "Run with invalid workspace path.",
+                "coder_count": 1,
+                "workspace_path": invalid_path,
+            },
+        )
+        assert create.status_code == 422
+        assert "workspace_path" in create.text
+
+
 def test_status_payload_contains_agent_results() -> None:
     with _create_client() as client:
         create = client.post(
@@ -255,6 +276,33 @@ def test_no_outcome_reason_is_recoverable() -> None:
     assert _is_coder_recoverable_failure_reason(reason)
 
 
+def test_no_outcome_reason_catches_no_coding_actions_phrasing() -> None:
+    assert _is_no_outcome_reason("No coding actions were performed; implementation outcome is missing.")
+    assert _is_no_outcome_reason("No coding was performed for the assigned task.")
+    assert _is_no_outcome_reason("Implementation outcome is missing from the agent response.")
+    assert _is_no_outcome_reason("No files were created during execution.")
+    assert _is_no_outcome_reason("No files were written to the workspace.")
+    assert _is_no_outcome_reason("No changes were made to any files.")
+    assert not _is_no_outcome_reason("Transient network error occurred.")
+
+
+def test_extract_primary_py_target_returns_first_py_file() -> None:
+    tasks = _simple_python_goal_tasks("calc.py")
+    assert _extract_primary_py_target(tasks, "build a calc") == "calc.py"
+
+
+def test_extract_primary_py_target_falls_back_to_main_for_python_goal() -> None:
+    from backend.memory.conflict_context import TaskDraft
+    tasks = [TaskDraft(task_id="t1", agent_id="coder-1", file_paths=["README.md", "docs/spec.md"])]
+    assert _extract_primary_py_target(tasks, "build a python app") == "main.py"
+    assert _extract_primary_py_target(tasks, "build an app") is None
+
+
+def test_detect_simple_python_target_matches_calc_keyword() -> None:
+    assert _detect_simple_python_target("build a python calc program") == "calc.py"
+    assert _detect_simple_python_target("create a python terminal calc") == "calc.py"
+
+
 def test_detect_simple_python_target_prefers_explicit_file_then_hello_world_default() -> None:
     assert _detect_simple_python_target("Create hello world in python at scripts/greeter.py") == "scripts/greeter.py"
     assert _detect_simple_python_target("Make hello world in python") == "hello_world.py"
@@ -276,6 +324,78 @@ def test_simple_python_goal_tasks_targets_single_file() -> None:
     assert len(tasks) == 1
     assert tasks[0].file_paths == ["hello_world.py"]
     assert tasks[0].agent_id == "coder-1"
+
+
+def test_tasks_from_assignments_infers_concrete_files_for_python_goal() -> None:
+    coordinator = CoordinatorOutput(
+        assignments=[
+            CoordinatorAssignment(
+                task_id="task-01",
+                task_summary="Initialize package, add README, and define dependencies",
+                assigned_agent_id="coder-1",
+                rationale="Set up snake game project scaffold.",
+            ),
+            CoordinatorAssignment(
+                task_id="task-02",
+                task_summary="Implement game loop and command line entrypoint",
+                assigned_agent_id="coder-1",
+                rationale="Provide playable snake game loop and CLI.",
+            ),
+        ]
+    )
+    tasks = _tasks_from_assignments(
+        coordinator,
+        coder_count=1,
+        goal="Build a snake game in Python",
+    )
+    flattened = [path for task in tasks for path in task.file_paths]
+    assert "README.md" in flattened
+    assert "requirements.txt" in flattened
+    assert any(path.startswith("snake_game/") for path in flattened)
+    assert all(not path.startswith("workspace/task_") for path in flattened)
+
+
+def test_tasks_from_assignments_ignores_placeholder_predicted_files() -> None:
+    coordinator = CoordinatorOutput(
+        assignments=[
+            CoordinatorAssignment(
+                task_id="task-01",
+                task_summary="Update docs",
+                assigned_agent_id="coder-1",
+                predicted_files=["workspace/task_1.txt", "README.md"],
+            )
+        ]
+    )
+    tasks = _tasks_from_assignments(
+        coordinator,
+        coder_count=1,
+        goal="Update README documentation",
+    )
+    assert tasks[0].file_paths == ["README.md"]
+
+
+def test_resolve_github_repo_name_prefers_explicit_repo() -> None:
+    class _Workdirs:
+        def detect_repo_full_name(self) -> str:
+            raise AssertionError("should not be called when explicit repo is provided")
+
+    assert _resolve_github_repo_name("owner/explicit", _Workdirs()) == "owner/explicit"
+
+
+def test_resolve_github_repo_name_uses_detected_remote() -> None:
+    class _Workdirs:
+        def detect_repo_full_name(self) -> str:
+            return "owner/from-remote"
+
+    assert _resolve_github_repo_name("", _Workdirs()) == "owner/from-remote"
+
+
+def test_resolve_github_repo_name_returns_empty_when_remote_missing() -> None:
+    class _Workdirs:
+        def detect_repo_full_name(self) -> str:
+            raise WorkdirRuntimeError("remote.origin.url is not configured.")
+
+    assert _resolve_github_repo_name("", _Workdirs()) == ""
 
 
 def test_qa_failure_reason_from_command_prefers_last_line() -> None:
