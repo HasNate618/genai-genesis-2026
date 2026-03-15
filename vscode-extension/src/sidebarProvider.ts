@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { SecretManager } from './secretManager';
 import { BackendClient } from './backendClient';
+import { JobPollingController } from './jobPolling';
 
 type TabId = 'settings' | 'goal' | 'approval' | 'agents' | 'logs';
 
@@ -15,14 +16,35 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private view?: vscode.WebviewView;
   private readonly backendClient: BackendClient;
+  private readonly poller: JobPollingController;
   private currentJobId: string | undefined;
-  private pollInterval: NodeJS.Timer | undefined;
+  private lastPollErrorAt = 0;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly secretManager: SecretManager
   ) {
     this.backendClient = new BackendClient();
+    this.poller = new JobPollingController(this.backendClient, {
+      onStatusUpdate: (status, plan) => {
+        this.view?.webview.postMessage({ command: 'statusUpdate', status, plan });
+      },
+      onError: (error) => {
+        if (!this.view) {
+          return;
+        }
+        const now = Date.now();
+        if (now - this.lastPollErrorAt < 5000) {
+          return;
+        }
+        this.lastPollErrorAt = now;
+        this.view.webview.postMessage({
+          command: 'notification',
+          type: 'error',
+          text: `Status polling issue: ${error.message}`,
+        });
+      },
+    });
   }
 
   resolveWebviewView(
@@ -45,8 +67,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this.handleMessage(msg)
     );
 
-    // Send persisted keys shortly after load
-    setTimeout(() => this.sendStoredKeys(), 500);
+    setTimeout(() => {
+      void this.sendStoredKeys();
+    }, 500);
   }
 
   focusTab(tab: TabId): void {
@@ -94,8 +117,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             moorchehKey: keys.moorcheh ?? '',
           });
           this.currentJobId = job_id;
+          this.lastPollErrorAt = 0;
           post({ command: 'runStarted', jobId: job_id });
-          this.startPolling(job_id);
+          this.poller.start(job_id);
         } catch (err: any) {
           post({ command: 'notification', type: 'error', text: `Failed: ${err.message}` });
         }
@@ -119,10 +143,36 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           post({
             command: 'notification',
             type: 'success',
-            text: msg.approved ? 'PR approved ✓' : 'Feedback sent',
+            text: msg.approved ? 'Result approved ✓' : 'Feedback sent',
           });
         }
         break;
+
+      case 'copyOutputPath': {
+        const outputPath = typeof msg.outputPath === 'string' ? msg.outputPath.trim() : '';
+        if (!outputPath) {
+          post({ command: 'notification', type: 'error', text: 'No output path is available yet.' });
+          break;
+        }
+        await vscode.env.clipboard.writeText(outputPath);
+        post({ command: 'notification', type: 'success', text: 'Output path copied to clipboard.' });
+        break;
+      }
+
+      case 'openOutputFolder': {
+        const outputPath = typeof msg.outputPath === 'string' ? msg.outputPath.trim() : '';
+        if (!outputPath) {
+          post({ command: 'notification', type: 'error', text: 'No output folder is available yet.' });
+          break;
+        }
+        try {
+          await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(outputPath));
+          post({ command: 'notification', type: 'success', text: 'Opened output folder in your file explorer.' });
+        } catch (err: any) {
+          post({ command: 'notification', type: 'error', text: `Unable to open output folder: ${err.message}` });
+        }
+        break;
+      }
 
       case 'deleteKey':
         await this.secretManager.delete(msg.key);
@@ -132,32 +182,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private startPolling(jobId: string): void {
-    this.stopPolling();
-    let lastStatus = '';
-    this.pollInterval = setInterval(async () => {
-      try {
-        const statusObj = await this.backendClient.getStatus(jobId);
-        let planPayload = undefined;
-        if (statusObj.status === 'awaiting_plan_approval' && lastStatus !== 'awaiting_plan_approval') {
-          const planData = await this.backendClient.getPlan(jobId);
-          planPayload = planData.plan;
-        }
-        lastStatus = statusObj.status;
-
-        this.view?.webview.postMessage({ command: 'statusUpdate', status: statusObj, plan: planPayload });
-        if (statusObj.status === 'done' || statusObj.status === 'failed') {
-          this.stopPolling();
-        }
-      } catch { /* silent */ }
-    }, 2000);
-  }
-
-  private stopPolling(): void {
-    if (this.pollInterval) {
-      clearInterval(this.pollInterval as any);
-      this.pollInterval = undefined;
-    }
+  dispose(): void {
+    this.poller.stop();
   }
 
   private getHtml(webview: vscode.Webview): string {

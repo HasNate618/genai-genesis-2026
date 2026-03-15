@@ -3,20 +3,42 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { SecretManager } from './secretManager';
 import { BackendClient } from './backendClient';
+import { JobPollingController } from './jobPolling';
 
 type TabId = 'settings' | 'goal' | 'approval' | 'agents' | 'logs';
 
 export class PanelManager {
   private panel: vscode.WebviewPanel | undefined;
   private readonly backendClient: BackendClient;
+  private readonly poller: JobPollingController;
   private currentJobId: string | undefined;
-  private pollInterval: NodeJS.Timer | undefined;
+  private lastPollErrorAt = 0;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly secretManager: SecretManager
   ) {
     this.backendClient = new BackendClient();
+    this.poller = new JobPollingController(this.backendClient, {
+      onStatusUpdate: (status, plan) => {
+        this.panel?.webview.postMessage({ command: 'statusUpdate', status, plan });
+      },
+      onError: (error) => {
+        if (!this.panel) {
+          return;
+        }
+        const now = Date.now();
+        if (now - this.lastPollErrorAt < 5000) {
+          return;
+        }
+        this.lastPollErrorAt = now;
+        this.panel.webview.postMessage({
+          command: 'notification',
+          type: 'error',
+          text: `Status polling issue: ${error.message}`,
+        });
+      },
+    });
   }
 
   createOrShow(): void {
@@ -61,8 +83,9 @@ export class PanelManager {
       this.dispose();
     });
 
-    // Send stored keys to webview after it loads
-    setTimeout(() => this.sendStoredKeys(), 500);
+    setTimeout(() => {
+      void this.sendStoredKeys();
+    }, 500);
   }
 
   focusTab(tab: TabId): void {
@@ -104,7 +127,6 @@ export class PanelManager {
           return;
         }
 
-        // Check backend is alive
         const alive = await this.backendClient.ping();
         if (!alive) {
           this.panel?.webview.postMessage({
@@ -123,8 +145,9 @@ export class PanelManager {
             moorchehKey: keys.moorcheh ?? '',
           });
           this.currentJobId = job_id;
+          this.lastPollErrorAt = 0;
           this.panel?.webview.postMessage({ command: 'runStarted', jobId: job_id });
-          this.startPolling(job_id);
+          this.poller.start(job_id);
         } catch (err: any) {
           this.panel?.webview.postMessage({
             command: 'notification',
@@ -161,13 +184,59 @@ export class PanelManager {
           this.panel?.webview.postMessage({
             command: 'notification',
             type: 'success',
-            text: msg.approved ? 'PR approved — checking out and merging!' : 'Feedback sent to Coder...',
+            text: msg.approved ? 'Result approved — finalizing workflow.' : 'Feedback sent to coding agents.',
           });
         } catch (err: any) {
           this.panel?.webview.postMessage({
             command: 'notification',
             type: 'error',
             text: `Approval error: ${err.message}`,
+          });
+        }
+        break;
+      }
+
+      case 'copyOutputPath': {
+        const outputPath = typeof msg.outputPath === 'string' ? msg.outputPath.trim() : '';
+        if (!outputPath) {
+          this.panel?.webview.postMessage({
+            command: 'notification',
+            type: 'error',
+            text: 'No output path is available yet.',
+          });
+          break;
+        }
+        await vscode.env.clipboard.writeText(outputPath);
+        this.panel?.webview.postMessage({
+          command: 'notification',
+          type: 'success',
+          text: 'Output path copied to clipboard.',
+        });
+        break;
+      }
+
+      case 'openOutputFolder': {
+        const outputPath = typeof msg.outputPath === 'string' ? msg.outputPath.trim() : '';
+        if (!outputPath) {
+          this.panel?.webview.postMessage({
+            command: 'notification',
+            type: 'error',
+            text: 'No output folder is available yet.',
+          });
+          break;
+        }
+        try {
+          await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(outputPath));
+          this.panel?.webview.postMessage({
+            command: 'notification',
+            type: 'success',
+            text: 'Opened output folder in your file explorer.',
+          });
+        } catch (err: any) {
+          this.panel?.webview.postMessage({
+            command: 'notification',
+            type: 'error',
+            text: `Unable to open output folder: ${err.message}`,
           });
         }
         break;
@@ -185,40 +254,8 @@ export class PanelManager {
     }
   }
 
-  private startPolling(jobId: string): void {
-    this.stopPolling();
-    let lastStatus = '';
-    this.pollInterval = setInterval(async () => {
-      try {
-        const status = await this.backendClient.getStatus(jobId);
-        
-        let planPayload = undefined;
-        if (status.status === 'awaiting_plan_approval' && lastStatus !== 'awaiting_plan_approval') {
-          const planData = await this.backendClient.getPlan(jobId);
-          planPayload = planData.plan;
-        }
-        lastStatus = status.status;
-
-        this.panel?.webview.postMessage({ command: 'statusUpdate', status, plan: planPayload });
-
-        if (status.status === 'done' || status.status === 'failed') {
-          this.stopPolling();
-        }
-      } catch {
-        // swallow polling errors silently
-      }
-    }, 2000);
-  }
-
-  private stopPolling(): void {
-    if (this.pollInterval) {
-      clearInterval(this.pollInterval as any);
-      this.pollInterval = undefined;
-    }
-  }
-
   dispose(): void {
-    this.stopPolling();
+    this.poller.stop();
     this.panel?.dispose();
     this.panel = undefined;
   }
