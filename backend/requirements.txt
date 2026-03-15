@@ -1,3 +1,5 @@
 fastapi
 uvicorn[standard]
 python-dotenv
+moorcheh-sdk>=0.1.0
+railtracks>=0.2.0

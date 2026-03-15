@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from backend.agents.railtracks_runtime import RailtracksRuntimeError, run_railtracks_agent
 from backend.agents.runtime import AgentRuntimeError, run_contract_agent
 
 router = APIRouter(prefix="/api/v1")
@@ -143,6 +144,11 @@ def _string_list(value: Any) -> list[str]:
 def _runtime_model_override() -> str | None:
     model = (os.getenv("AGENTIC_ARMY_GEMINI_MODEL") or "").strip()
     return model or None
+
+
+def _agent_runtime_mode() -> str:
+    configured = (os.getenv("AGENTIC_ARMY_AGENT_RUNTIME") or "contract").strip().lower()
+    return "railtracks" if configured == "railtracks" else "contract"
 
 
 def _actual_coding_parallelism(default_parallelism: int) -> int:
@@ -612,13 +618,21 @@ async def _run_planning_agent(
     }
 
     try:
-        result = await run_contract_agent(
-            "planning_agent.md",
-            payload,
-            req.gemini_key,
-            model=_runtime_model_override(),
-        )
-    except AgentRuntimeError as exc:
+        if _agent_runtime_mode() == "railtracks":
+            result = await run_railtracks_agent(
+                "planning_agent.md",
+                payload,
+                req.gemini_key,
+                model=_runtime_model_override(),
+            )
+        else:
+            result = await run_contract_agent(
+                "planning_agent.md",
+                payload,
+                req.gemini_key,
+                model=_runtime_model_override(),
+            )
+    except (AgentRuntimeError, RailtracksRuntimeError) as exc:
         raise RuntimeError(f"Planning agent runtime failed: {exc}") from exc
 
     plan = result.get("plan")
@@ -653,13 +667,21 @@ async def _run_task_coordinator_agent(
     }
 
     try:
-        result = await run_contract_agent(
-            "task_coordinator_agent.md",
-            payload,
-            req.gemini_key,
-            model=_runtime_model_override(),
-        )
-    except AgentRuntimeError as exc:
+        if _agent_runtime_mode() == "railtracks":
+            result = await run_railtracks_agent(
+                "task_coordinator_agent.md",
+                payload,
+                req.gemini_key,
+                model=_runtime_model_override(),
+            )
+        else:
+            result = await run_contract_agent(
+                "task_coordinator_agent.md",
+                payload,
+                req.gemini_key,
+                model=_runtime_model_override(),
+            )
+    except (AgentRuntimeError, RailtracksRuntimeError) as exc:
         raise RuntimeError(f"Task coordinator runtime failed: {exc}") from exc
 
     assignments = result.get("assignments")
@@ -701,13 +723,21 @@ async def _run_conflict_analysis_agent(
     }
 
     try:
-        result = await run_contract_agent(
-            "conflict_analysis_agent.md",
-            payload,
-            req.gemini_key,
-            model=_runtime_model_override(),
-        )
-    except AgentRuntimeError as exc:
+        if _agent_runtime_mode() == "railtracks":
+            result = await run_railtracks_agent(
+                "conflict_analysis_agent.md",
+                payload,
+                req.gemini_key,
+                model=_runtime_model_override(),
+            )
+        else:
+            result = await run_contract_agent(
+                "conflict_analysis_agent.md",
+                payload,
+                req.gemini_key,
+                model=_runtime_model_override(),
+            )
+    except (AgentRuntimeError, RailtracksRuntimeError) as exc:
         raise RuntimeError(f"Conflict analysis runtime failed: {exc}") from exc
 
     score = _safe_int(result.get("overall_conflict_score"), 0)
@@ -800,13 +830,22 @@ async def _run_coding_agents(
             },
         }
         try:
-            result = await run_contract_agent(
-                "coding_agent.md",
-                payload,
-                req.gemini_key,
-                model=_runtime_model_override(),
-            )
-        except AgentRuntimeError as exc:
+            if _agent_runtime_mode() == "railtracks":
+                result = await run_railtracks_agent(
+                    "coding_agent.md",
+                    payload,
+                    req.gemini_key,
+                    model=_runtime_model_override(),
+                    agent_id=agent_id,
+                )
+            else:
+                result = await run_contract_agent(
+                    "coding_agent.md",
+                    payload,
+                    req.gemini_key,
+                    model=_runtime_model_override(),
+                )
+        except (AgentRuntimeError, RailtracksRuntimeError) as exc:
             raise RuntimeError(f"Coding agent runtime failed for {agent_id}: {exc}") from exc
 
         task_ids = [
@@ -875,13 +914,22 @@ async def _run_merge_agent(
     }
 
     try:
-        result = await run_contract_agent(
-            "merge_agent.md",
-            payload,
-            req.gemini_key,
-            model=_runtime_model_override(),
-        )
-    except AgentRuntimeError as exc:
+        if _agent_runtime_mode() == "railtracks":
+            result = await run_railtracks_agent(
+                "merge_agent.md",
+                payload,
+                req.gemini_key,
+                model=_runtime_model_override(),
+                agent_id="merge-agent",
+            )
+        else:
+            result = await run_contract_agent(
+                "merge_agent.md",
+                payload,
+                req.gemini_key,
+                model=_runtime_model_override(),
+            )
+    except (AgentRuntimeError, RailtracksRuntimeError) as exc:
         raise RuntimeError(f"Merge agent runtime failed: {exc}") from exc
 
     summary = result.get("summary")
@@ -953,13 +1001,22 @@ async def _run_qa_agent(
     }
 
     try:
-        result = await run_contract_agent(
-            "qa_agent.md",
-            payload,
-            req.gemini_key,
-            model=_runtime_model_override(),
-        )
-    except AgentRuntimeError as exc:
+        if _agent_runtime_mode() == "railtracks":
+            result = await run_railtracks_agent(
+                "qa_agent.md",
+                payload,
+                req.gemini_key,
+                model=_runtime_model_override(),
+                agent_id="qa-agent",
+            )
+        else:
+            result = await run_contract_agent(
+                "qa_agent.md",
+                payload,
+                req.gemini_key,
+                model=_runtime_model_override(),
+            )
+    except (AgentRuntimeError, RailtracksRuntimeError) as exc:
         raise RuntimeError(f"QA agent runtime failed: {exc}") from exc
 
     summary = result.get("summary")
