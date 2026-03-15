@@ -255,9 +255,13 @@ class JobRuntime:
                 await self._set_agent_states(job_id, planner="running")
 
             await self._set_status(job_id, STATUS_COORDINATING)
-            await self._set_agent_states(job_id, planner="done", conflict_manager="running")
+            await self._set_agent_states(job_id, planner="done", coordinator="running")
             await self._append_log(job_id, "Coordination phase started.")
             draft_tasks = _draft_tasks(request.coder_count)
+            await self._sleep_tick()
+            
+            await self._set_agent_states(job_id, coordinator="done", conflict_manager="running")
+            await self._append_log(job_id, "Conflict analysis phase started.")
             adjusted_tasks = draft_tasks
             coordination_lines = ["# Conflict Assessment\n"]
             if hooks is not None:
@@ -392,6 +396,7 @@ class JobRuntime:
                     await self._set_agent_states(
                         job_id,
                         planner="done",
+                        coordinator="done",
                         conflict_manager="done",
                         coder="done",
                         verification="done",
@@ -416,6 +421,7 @@ class JobRuntime:
             await self._set_agent_states(
                 job_id,
                 planner="failed",
+                coordinator="failed",
                 conflict_manager="failed",
                 coder="failed",
                 verification="failed",
@@ -499,6 +505,7 @@ class JobRuntime:
 def _default_agent_states() -> dict[str, str]:
     return {
         "planner": "idle",
+        "coordinator": "idle",
         "conflict_manager": "idle",
         "coder": "idle",
         "verification": "idle",
