@@ -8,6 +8,8 @@ dist/
 npm-debug.log
 yarn-error.log
 
+.railtracks
+
 # === Standard Python / Backend ===
 __pycache__/
 *.py[cod]
