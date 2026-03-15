@@ -58,8 +58,9 @@ export class PanelManager {
       this.context.subscriptions
     );
 
-    this.sendWorkspacePath();
-
+    // Workspace path is baked into the HTML via {{WORKSPACE_PATH}} templating,
+    // so no initial postMessage is needed. Keep the subscription so the UI
+    // updates if the user opens/closes a folder while the panel is visible.
     this.context.subscriptions.push(
       vscode.workspace.onDidChangeWorkspaceFolders(() => this.sendWorkspacePath())
     );
@@ -266,10 +267,16 @@ export class PanelManager {
     );
 
     let html = fs.readFileSync(htmlPath, 'utf8');
+
+    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+    // Escape for embedding in a JS string literal inside the HTML.
+    const escapedPath = workspacePath.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
     html = html
       .replace(/{{CSP_SOURCE}}/g, webview.cspSource)
       .replace(/{{CSS_URI}}/g, cssUri.toString())
-      .replace(/{{JS_URI}}/g, jsUri.toString());
+      .replace(/{{JS_URI}}/g, jsUri.toString())
+      .replace(/{{WORKSPACE_PATH}}/g, escapedPath);
 
     return html;
   }
