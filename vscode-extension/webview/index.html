@@ -12,7 +12,6 @@
 </head>
 <body>
 
-  <!-- ── Header ─────────────────────────────────────────────── -->
   <header class="app-header">
     <div class="logo">
       <div class="logo-icon">⚡</div>
@@ -24,7 +23,6 @@
     <div id="backend-status" class="offline"><span class="status-dot"></span><span id="backend-status-text">Offline</span></div>
   </header>
 
-  <!-- ── Tab bar ────────────────────────────────────────────── -->
   <nav class="tab-bar">
     <button class="tab-btn active" data-tab="settings" id="tab-settings">⚙ Settings</button>
     <button class="tab-btn" data-tab="goal"     id="tab-goal">Goal</button>
@@ -33,17 +31,11 @@
     <button class="tab-btn" data-tab="logs"     id="tab-logs">Logs</button>
   </nav>
 
-  <!-- ── Notification ───────────────────────────────────────── -->
   <div id="notification" class="notification hidden"></div>
 
-  <!-- ══════════════════════════════════════════════════════════
-       SETTINGS PANEL
-  ═══════════════════════════════════════════════════════════════ -->
   <section id="panel-settings" class="panel active">
-
     <div class="section-title">API Keys</div>
 
-    <!-- Gemini row -->
     <div class="field-row mb-8">
       <div class="field-label"><span class="req">*</span>&nbsp;Gemini</div>
       <div class="field-input-wrap">
@@ -52,7 +44,6 @@
       </div>
     </div>
 
-    <!-- Moorcheh row -->
     <div class="field-row mb-8">
       <div class="field-label">Moorcheh</div>
       <div class="field-input-wrap">
@@ -63,12 +54,11 @@
 
     <hr class="divider" />
 
-    <!-- Scope segmented control -->
     <div class="field-row">
       <div class="field-label">Scope</div>
       <div class="seg-control" id="scope-control">
         <button class="seg-btn active" data-scope="global">Global</button>
-        <button class="seg-btn"        data-scope="workspace">Workspace</button>
+        <button class="seg-btn" data-scope="workspace">Workspace</button>
       </div>
     </div>
 
@@ -76,19 +66,13 @@
       <button class="btn btn-primary btn-full" id="save-keys-btn">Save Keys</button>
     </div>
 
-    <!-- Saved keys section -->
     <div id="saved-keys-section" class="hidden" style="margin-top: 20px;">
       <div class="section-title">Saved Keys</div>
       <div id="saved-keys-list"></div>
     </div>
-
   </section>
 
-  <!-- ══════════════════════════════════════════════════════════
-       GOAL PANEL
-  ═══════════════════════════════════════════════════════════════ -->
   <section id="panel-goal" class="panel">
-
     <div class="section-title">Define Goal</div>
 
     <div class="field-row" style="align-items:flex-start">
@@ -100,7 +84,6 @@
 
     <hr class="divider" />
 
-    <!-- Coder count -->
     <div class="field-row">
       <div class="field-label">Coders</div>
       <div class="slider-row" style="flex:1">
@@ -119,27 +102,20 @@
         <code id="job-id-display"></code>
       </div>
     </div>
-
   </section>
 
-  <!-- ══════════════════════════════════════════════════════════
-       REVIEW PANEL (Dual HitL Gates)
-  ═══════════════════════════════════════════════════════════════ -->
   <section id="panel-review" class="panel">
-
     <div class="section-title">Human-in-the-Loop Review</div>
 
-    <!-- Waiting state -->
     <div id="review-waiting" class="empty-state">
       <div class="empty-icon">⏳</div>
       <p>Waiting for an item to review...</p>
     </div>
 
-    <!-- HitL 1: Plan Review -->
     <div id="plan-review-content" class="hidden">
       <div class="status-done mb-8">📋 Please review the Technical Roadmap</div>
       <div class="plan-box" id="plan-text"></div>
-      
+
       <div class="feedback-section mt-8">
         <div class="section-title">Feedback</div>
         <textarea id="plan-feedback" placeholder="Optional: Provide feedback to the planner if revising..." rows="3"></textarea>
@@ -151,38 +127,29 @@
       </div>
     </div>
 
-    <!-- HitL 2: Result Review -->
     <div id="result-review-content" class="hidden">
-      <div class="status-done mb-8">🚀 PR Ready! Please review the final execution.</div>
-      
+      <div class="status-done mb-8">🚀 Final output ready! Please review the execution.</div>
+
       <div class="feedback-section mt-8">
         <div class="section-title">Feedback</div>
-        <textarea id="result-feedback" placeholder="Optional: Provide feedback to the coder if revising..." rows="3"></textarea>
+        <textarea id="result-feedback" placeholder="Optional: Provide revision feedback..." rows="3"></textarea>
       </div>
 
       <div class="action-row center mt-8">
-        <button class="btn btn-success" id="approve-result-btn">✅ Approve & Merge</button>
-        <button class="btn btn-feedback"  id="deny-result-btn">≡ Revise PR with Feedback</button>
+        <button class="btn btn-success" id="approve-result-btn">✅ Approve Result</button>
+        <button class="btn btn-feedback"  id="deny-result-btn">≡ Revise with Feedback</button>
       </div>
     </div>
 
-    <!-- Approved / Idle -->
     <div id="review-done" class="hidden">
       <div class="status-done">✓ Review complete — agents are executing!</div>
     </div>
-
   </section>
 
-  <!-- ══════════════════════════════════════════════════════════
-       AGENTS PANEL
-  ═══════════════════════════════════════════════════════════════ -->
   <section id="panel-agents" class="panel panel-fill">
-
     <div class="section-title">Pipeline Status</div>
 
     <div class="agent-accordion" id="agent-accordion">
-
-      <!-- Planner -->
       <div class="agent-card" id="agent-planner" data-agent="planner">
         <div class="agent-header" id="agent-header-planner">
           <span class="agent-chevron" id="chevron-planner">▶</span>
@@ -200,76 +167,143 @@
         </div>
       </div>
 
-      <!-- Conflict Manager -->
-      <div class="agent-card" id="agent-conflict-manager" data-agent="conflict_manager">
-        <div class="agent-header" id="agent-header-conflict-manager">
-          <span class="agent-chevron" id="chevron-conflict-manager">▶</span>
-          <div class="agent-icon">🎯</div>
+      <div class="agent-card" id="agent-task-coordinator" data-agent="task_coordinator">
+        <div class="agent-header" id="agent-header-task-coordinator">
+          <span class="agent-chevron" id="chevron-task-coordinator">▶</span>
+          <div class="agent-icon">🗂</div>
           <div class="agent-info">
-            <div class="agent-name">Conflict Mgr</div>
-            <div class="agent-role">Chunks tasks & context</div>
+            <div class="agent-name">Task Coordinator</div>
+            <div class="agent-role">Distributes and sequences work</div>
           </div>
           <span class="badge badge-idle">Idle</span>
         </div>
-        <div class="agent-result-body hidden" id="agent-result-conflict-manager">
-          <div class="agent-result-content" id="agent-result-content-conflict-manager">
+        <div class="agent-result-body hidden" id="agent-result-task-coordinator">
+          <div class="agent-result-content" id="agent-result-content-task-coordinator">
             <span class="agent-result-empty">No results yet.</span>
           </div>
         </div>
       </div>
 
-      <!-- Coders -->
-      <div class="agent-card" id="agent-coder" data-agent="coder">
-        <div class="agent-header" id="agent-header-coder">
-          <span class="agent-chevron" id="chevron-coder">▶</span>
+      <div class="agent-card" id="agent-conflict-analyst" data-agent="conflict_analyst">
+        <div class="agent-header" id="agent-header-conflict-analyst">
+          <span class="agent-chevron" id="chevron-conflict-analyst">▶</span>
+          <div class="agent-icon">⚖️</div>
+          <div class="agent-info">
+            <div class="agent-name">Conflict Analyst</div>
+            <div class="agent-role">Evaluates overlap and risk</div>
+          </div>
+          <span class="badge badge-idle">Idle</span>
+        </div>
+        <div class="agent-result-body hidden" id="agent-result-conflict-analyst">
+          <div class="agent-result-content" id="agent-result-content-conflict-analyst">
+            <span class="agent-result-empty">No results yet.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="agent-card" id="agent-user-agents" data-agent="user_agents">
+        <div class="agent-header" id="agent-header-user-agents">
+          <span class="agent-chevron" id="chevron-user-agents">▶</span>
           <div class="agent-icon">💻</div>
           <div class="agent-info">
-            <div class="agent-name">Coders</div>
-            <div class="agent-role">Parallel branch execution</div>
+            <div class="agent-name">Coding Agents</div>
+            <div class="agent-role">Implements task assignments</div>
           </div>
           <span class="badge badge-idle">Idle</span>
         </div>
-        <div class="agent-result-body hidden" id="agent-result-coder">
-          <div class="agent-result-content" id="agent-result-content-coder">
+        <div class="agent-result-body hidden" id="agent-result-user-agents">
+          <div class="agent-result-content" id="agent-result-content-user-agents">
             <span class="agent-result-empty">No results yet.</span>
           </div>
         </div>
       </div>
 
-      <!-- Verification -->
-      <div class="agent-card" id="agent-verification" data-agent="verification">
-        <div class="agent-header" id="agent-header-verification">
-          <span class="agent-chevron" id="chevron-verification">▶</span>
+      <div class="agent-card" id="agent-merge-agent" data-agent="merge_agent">
+        <div class="agent-header" id="agent-header-merge-agent">
+          <span class="agent-chevron" id="chevron-merge-agent">▶</span>
+          <div class="agent-icon">🔀</div>
+          <div class="agent-info">
+            <div class="agent-name">Merge Agent</div>
+            <div class="agent-role">Integrates coder outputs</div>
+          </div>
+          <span class="badge badge-idle">Idle</span>
+        </div>
+        <div class="agent-result-body hidden" id="agent-result-merge-agent">
+          <div class="agent-result-content" id="agent-result-content-merge-agent">
+            <span class="agent-result-empty">No results yet.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="agent-card" id="agent-qa-agent" data-agent="qa_agent">
+        <div class="agent-header" id="agent-header-qa-agent">
+          <span class="agent-chevron" id="chevron-qa-agent">▶</span>
           <div class="agent-icon">🧪</div>
           <div class="agent-info">
-            <div class="agent-name">Verification</div>
-            <div class="agent-role">Automated QA & Linters</div>
+            <div class="agent-name">QA Agent</div>
+            <div class="agent-role">Verifies quality and readiness</div>
           </div>
           <span class="badge badge-idle">Idle</span>
         </div>
-        <div class="agent-result-body hidden" id="agent-result-verification">
-          <div class="agent-result-content" id="agent-result-content-verification">
+        <div class="agent-result-body hidden" id="agent-result-qa-agent">
+          <div class="agent-result-content" id="agent-result-content-qa-agent">
             <span class="agent-result-empty">No results yet.</span>
           </div>
         </div>
       </div>
-
     </div>
 
-    <!-- Pipeline status bar -->
     <div class="section-title" style="margin-top:4px">Stage</div>
     <div class="pipeline-bar">
       <span class="pipeline-label">Current</span>
       <span id="pipeline-stage">No active run</span>
     </div>
 
+    <div class="section-title" style="margin-top:10px">Workflow Rounds</div>
+    <div class="workflow-rounds">
+      <div class="workflow-round-item"><span>Planning</span><strong id="round-planning">0</strong></div>
+      <div class="workflow-round-item"><span>Coordination</span><strong id="round-coordination">0</strong></div>
+      <div class="workflow-round-item"><span>Execution</span><strong id="round-execution">0</strong></div>
+    </div>
+
+    <div class="section-title" style="margin-top:10px">Workflow Details</div>
+    <div class="workflow-grid">
+      <div class="workflow-card">
+        <div class="workflow-card-title">Context</div>
+        <div class="workflow-card-content" id="detail-workflow-context"><span class="agent-result-empty">No data yet.</span></div>
+      </div>
+      <div class="workflow-card">
+        <div class="workflow-card-title">Task Distribution</div>
+        <div class="workflow-card-content" id="detail-task-distribution"><span class="agent-result-empty">No data yet.</span></div>
+      </div>
+      <div class="workflow-card">
+        <div class="workflow-card-title">Conflict Report</div>
+        <div class="workflow-card-content" id="detail-conflict-report"><span class="agent-result-empty">No data yet.</span></div>
+      </div>
+      <div class="workflow-card">
+        <div class="workflow-card-title">Merge Result</div>
+        <div class="workflow-card-content" id="detail-merge-result"><span class="agent-result-empty">No data yet.</span></div>
+      </div>
+      <div class="workflow-card">
+        <div class="workflow-card-title">QA Result</div>
+        <div class="workflow-card-content" id="detail-qa-result"><span class="agent-result-empty">No data yet.</span></div>
+      </div>
+      <div class="workflow-card workflow-card-full">
+        <div class="workflow-card-title">Final Output</div>
+        <div class="workflow-output-path-row">
+          <span class="workflow-output-path-label">Primary Output Path</span>
+          <code id="final-output-path" class="workflow-output-path">Not available yet</code>
+        </div>
+        <div class="workflow-output-actions">
+          <button class="btn btn-ghost btn-sm" id="copy-output-path-btn">Copy Path</button>
+          <button class="btn btn-ghost btn-sm" id="open-output-folder-btn">Open Folder</button>
+        </div>
+        <div class="workflow-card-content" id="detail-final-output"><span class="agent-result-empty">Final output appears when merge/QA complete.</span></div>
+      </div>
+    </div>
   </section>
 
-  <!-- ══════════════════════════════════════════════════════════
-       LOGS PANEL
-  ═══════════════════════════════════════════════════════════════ -->
   <section id="panel-logs" class="panel panel-fill">
-
     <div class="log-controls">
       <div class="section-title" style="margin:0">Console</div>
       <span id="log-count" class="log-count" style="margin-left:6px"></span>
@@ -278,7 +312,6 @@
     </div>
 
     <pre id="log-output" class="log-console"><span class="log-placeholder">Logs will appear when a pipeline is running...</span></pre>
-
   </section>
 
   <script src="{{JS_URI}}"></script>
