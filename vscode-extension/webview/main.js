@@ -27,8 +27,6 @@ const savedKeysList = $('saved-keys-list');
 
 // Goal
 const goalInput = $('goal-input');
-const coderSlider = $('coder-count');
-const coderDisplay = $('coder-count-display');
 const launchBtn = $('launch-btn');
 const jobInfo = $('job-info');
 const jobIdDisplay = $('job-id-display');
@@ -132,9 +130,6 @@ function createKeyItem(name, keyId) {
 }
 
 // ── Goal ──────────────────────────────────────────────────────────
-coderSlider.addEventListener('input', () => {
-  coderDisplay.textContent = coderSlider.value;
-});
 
 launchBtn.addEventListener('click', () => {
   const goal = goalInput.value.trim();
@@ -144,7 +139,7 @@ launchBtn.addEventListener('click', () => {
   vscode.postMessage({
     command: 'startRun',
     goal,
-    coderCount: parseInt(coderSlider.value, 10),
+    coderCount: 2,
   });
 });
 
