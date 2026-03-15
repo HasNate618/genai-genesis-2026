@@ -1,4 +1,4 @@
-# AgenticArmy Implementation Plan
+# AgenticArmy Project Plan
 
 ## Project Overview
 Multi-agent collaboration system with human-in-the-loop approval workflow for automated code generation and testing.
@@ -20,6 +20,7 @@ Multi-agent collaboration system with human-in-the-loop approval workflow for au
 3. **Agent Orchestration** (Railword)
    - Planning Agent
    - Coordinator Agent
+   - Conflict Analyst Agent
    - Coder Agents (multiple)
    - Merger Agent
    - QA Tester Agent
@@ -48,9 +49,20 @@ Multi-agent collaboration system with human-in-the-loop approval workflow for au
 
 ### Step 5: Conflict Analysis
 - Calculate conflict scores based on file overlap
-- Threshold-based gating
+- Threshold-based gating **(20% likliness of similarity)**
 - If threshold exceeded, return to Step 4
 - Otherwise, proceed to execution
+
+#### **Equation used:**
+
+```
+riskScore = [(numOfSharedDependencies * 0.2) + (percentageOfTaskSimilarity * 0.5) + (isSameCategoryTask * 0.3)]
+```
+
+This equation works by weighting three core metrics:
+1. Shared dependencies; if two tasks require similar dependencies, it's plausible that they are the same (or at least similar). Lowly weighted.
+2. Semantic similarity of task summaries; if tasks are semantically similar, then they're similar... *Proof: Obvious*. Highly weighted due to raw simplicity and reliability.
+3. Identical task categories; all tasks have to fall into a category of {Fix, Feature, Refactor} etc. If tasks are of a different category, it is quite likley that they are not the same task and thus will probably not have similar implementations.  
 
 ### Step 6: Parallel Coding
 - Coder agents work in isolated environments
@@ -105,44 +117,3 @@ Multi-agent collaboration system with human-in-the-loop approval workflow for au
       conflict_detector.py
     main.py
 ```
-
-## Implementation Phases
-
-### Phase 1: Core Infrastructure
-- FastAPI setup
-- Basic Railwork agent definitions
-- VSCode extension skeleton
-
-### Phase 2: Agent Communication
-- Message passing between agents
-- State management
-- Basic task distribution
-
-### Phase 3: Semantic Memory
-- Vector store integration (Moorcheh)
-  - **Status: COMPLETE** ✅
-  - Implemented: vector-memory scaffold with deterministic record schema, embedding provider (mock + OpenAI-compatible), **Moorcheh Python SDK client wrapper**, store façade, context reader/writer, conflict compensator, telemetry, FastAPI debug endpoints, and comprehensive unit tests.
-  - All 7 tests pass locally.
-  - Live integration test (2026-03-14): namespace provision ✓, vector upload ✓, search ✓, health check ✓
-  - Key change: Switched from custom REST client to official `moorcheh-sdk` for automatic auth, retry logic, and type safety.
-  - Docs updated: docs/Moorcheh.md now describes SDK usage, live test results, and architecture diagram.
-- Conflict detection logic
-- File tracking
-
-### Phase 4: Human Integration
-- Approval UI
-- Task interface
-- Real-time updates
-
-### Phase 5: Testing & Refinement
-- End-to-end workflows
-- Conflict resolution improvements
-- Performance optimization
-
-Live Moorcheh integration test results (2026-03-14):
-- Initial REST client attempts: namespace provision ✓, but vector upload ✗ (401/403 auth errors)
-- Switched to official `moorcheh-sdk`: all operations ✓ (list, provision, upload, search, health)
-- 3 test vectors uploaded successfully with metadata (workflow_id, record_type, agent_id)
-- Search returned results with correct metadata preservation
-- Decision: SDK integration complete. Future work: wire context writer/reader into orchestration runtime.
-
