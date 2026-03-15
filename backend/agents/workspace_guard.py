@@ -109,6 +109,17 @@ class WorkspaceGuard:
             raise WorkspaceGuardError(
                 f"Command '{binary}' is not in the allowed binary list."
             )
+
+        # Prevent shells from being used to bypass the allowlist via `-c`.
+        if binary in {"bash", "sh"}:
+            for arg in args[1:]:
+                # Disallow `-c` and combined forms like `-ce`, `-cxe`, etc.
+                if arg == "-c" or arg.startswith("-c"):
+                    raise WorkspaceGuardError(
+                        "Using '-c' (or combined flags containing '-c') with shell "
+                        "commands is not allowed."
+                    )
+
         return args
 
     def display_path(self, path: Path) -> str:
