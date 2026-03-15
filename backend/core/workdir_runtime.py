@@ -140,6 +140,16 @@ class WorkdirRuntime:
             merged_sha = self._run_git(
                 ["-C", str(merge_dir), "rev-parse", "HEAD"]
             ).stdout.strip()
+            # Avoid moving a branch that is currently checked out in the main worktree,
+            # which would leave the working tree/index out of sync with the branch ref.
+            current_main_branch = (
+                self._run_git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+            )
+            if current_main_branch == resolved_base_branch:
+                raise WorkdirRuntimeError(
+                    f"Cannot finalize merge into '{resolved_base_branch}' because it is "
+                    "currently checked out in the main worktree."
+                )
             self._run_git(["update-ref", f"refs/heads/{resolved_base_branch}", merged_sha])
         finally:
             self._run_git(["worktree", "remove", "--force", str(merge_dir)], check=False)
