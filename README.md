@@ -1,6 +1,20 @@
 # AgenticArmy
 Making AI agents work together properly.
 
+## Quickstart
+Run these commands from the project root to test the extension UI:
+```
+python -m venv .venv
+.venv\Scripts\activate.ps1
+pip install -r requirements.txt
+npm install --global yo generator-code
+cd vscode-extension
+npm install
+npm compile
+cd ..
+python -m backend.main
+```
+
 ## Notes to devs
 Tell your agent to check docs/question-and-answer.md, as it should help with its context given the additional information about future project structure. Note that because infastructure plans have changed so many times, it may have lost relevance.
 
