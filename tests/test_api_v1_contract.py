@@ -13,7 +13,7 @@ def _wait_for_status(
     deadline = time.time() + timeout_seconds
     last_payload: dict = {}
     while time.time() < deadline:
-        response = client.get(f"/api/v1/jobs/{job_id}/status")
+        response = client.get(f"/api/v1beta/jobs/{job_id}/status")
         assert response.status_code == 200
         payload = response.json()
         last_payload = payload
@@ -31,7 +31,7 @@ def _create_client() -> TestClient:
 
 def test_health_contract_shape() -> None:
     with _create_client() as client:
-        response = client.get("/api/v1/health")
+        response = client.get("/api/v1beta/health")
         assert response.status_code == 200
         assert response.json() == {"status": "ok", "service": "agentic-army-v1"}
 
@@ -39,7 +39,7 @@ def test_health_contract_shape() -> None:
 def test_full_job_lifecycle_with_reviews() -> None:
     with _create_client() as client:
         create = client.post(
-            "/api/v1/jobs",
+            "/api/v1beta/jobs",
             json={
                 "goal": "Align Moorcheh branch to API v1 state machine.",
                 "coder_count": 2,
@@ -52,13 +52,13 @@ def test_full_job_lifecycle_with_reviews() -> None:
 
         _wait_for_status(client, job_id, "awaiting_plan_approval")
 
-        plan = client.get(f"/api/v1/jobs/{job_id}/plan")
+        plan = client.get(f"/api/v1beta/jobs/{job_id}/plan")
         assert plan.status_code == 200
         assert plan.json()["status"] == "awaiting_plan_approval"
         assert "Align Moorcheh branch" in plan.json()["plan"]
 
         plan_review = client.post(
-            f"/api/v1/jobs/{job_id}/plan/review",
+            f"/api/v1beta/jobs/{job_id}/plan/review",
             json={"approved": True, "feedback": "Looks good."},
         )
         assert plan_review.status_code == 200
@@ -74,7 +74,7 @@ def test_full_job_lifecycle_with_reviews() -> None:
         }
 
         result_review = client.post(
-            f"/api/v1/jobs/{job_id}/result/review",
+            f"/api/v1beta/jobs/{job_id}/result/review",
             json={"approved": True, "feedback": "Ship it."},
         )
         assert result_review.status_code == 200
@@ -88,7 +88,7 @@ def test_full_job_lifecycle_with_reviews() -> None:
 def test_plan_rejection_loops_back_to_planning() -> None:
     with _create_client() as client:
         create = client.post(
-            "/api/v1/jobs",
+            "/api/v1beta/jobs",
             json={
                 "goal": "Generate a conflict-safe coordination plan.",
                 "coder_count": 1,
@@ -100,28 +100,28 @@ def test_plan_rejection_loops_back_to_planning() -> None:
         job_id = create.json()["job_id"]
 
         _wait_for_status(client, job_id, "awaiting_plan_approval")
-        first_plan = client.get(f"/api/v1/jobs/{job_id}/plan").json()["plan"]
+        first_plan = client.get(f"/api/v1beta/jobs/{job_id}/plan").json()["plan"]
 
         rejected = client.post(
-            f"/api/v1/jobs/{job_id}/plan/review",
+            f"/api/v1beta/jobs/{job_id}/plan/review",
             json={"approved": False, "feedback": "Add stronger conflict mitigation detail."},
         )
         assert rejected.status_code == 200
 
         _wait_for_status(client, job_id, "awaiting_plan_approval")
-        second_plan = client.get(f"/api/v1/jobs/{job_id}/plan").json()["plan"]
+        second_plan = client.get(f"/api/v1beta/jobs/{job_id}/plan").json()["plan"]
         assert second_plan != first_plan
         assert "Add stronger conflict mitigation detail." in second_plan
 
         approved = client.post(
-            f"/api/v1/jobs/{job_id}/plan/review",
+            f"/api/v1beta/jobs/{job_id}/plan/review",
             json={"approved": True, "feedback": "Approved now."},
         )
         assert approved.status_code == 200
 
         _wait_for_status(client, job_id, "review_ready")
         final = client.post(
-            f"/api/v1/jobs/{job_id}/result/review",
+            f"/api/v1beta/jobs/{job_id}/result/review",
             json={"approved": True, "feedback": "Done."},
         )
         assert final.status_code == 200
@@ -131,7 +131,7 @@ def test_plan_rejection_loops_back_to_planning() -> None:
 def test_result_review_rejects_wrong_state() -> None:
     with _create_client() as client:
         create = client.post(
-            "/api/v1/jobs",
+            "/api/v1beta/jobs",
             json={
                 "goal": "Test result gate validation.",
                 "coder_count": 1,
@@ -143,7 +143,7 @@ def test_result_review_rejects_wrong_state() -> None:
         job_id = create.json()["job_id"]
 
         response = client.post(
-            f"/api/v1/jobs/{job_id}/result/review",
+            f"/api/v1beta/jobs/{job_id}/result/review",
             json={"approved": True, "feedback": "Too early."},
         )
         assert response.status_code == 409

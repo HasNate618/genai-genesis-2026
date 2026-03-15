@@ -33,8 +33,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# routes contains the current HITL workflow implementation and should take
-# priority over legacy v1 routes for overlapping `/api/v1/*` endpoints.
+# `routes` provides the active HITL workflow implementation under `/api/v1`.
+# `v1_router` provides the state-machine implementation under `/api/v1beta`,
+# keeping both contracts accessible without overlap.
 app.include_router(router)
 app.include_router(v1_router)
 app.include_router(memory_router)

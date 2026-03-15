@@ -1,4 +1,4 @@
-"""`/api/v1` routes aligned with the VS Code extension contract."""
+"""`/api/v1beta` routes — state-machine implementation aligned with the VS Code extension contract."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from backend.core.job_runtime import (
 )
 
 
-router = APIRouter(prefix="/api/v1", tags=["api-v1"])
+router = APIRouter(prefix="/api/v1beta", tags=["api-v1beta"])
 _runtime = JobRuntime()
 
 
