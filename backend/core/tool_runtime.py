@@ -185,7 +185,25 @@ class WorkspaceToolRuntime:
         return target
 
     def _validate_command(self, parts: list[str]) -> None:
-        if parts[0] == "git":
+        cmd = parts[0]
+
+        # Disallow inline code execution for general-purpose interpreters so that
+        # path/argument validation cannot be bypassed via strings like
+        # `python -c 'open("/etc/passwd").read()'` or `node -e '...'`.
+        if cmd in ("python", "python3"):
+            for arg in parts[1:]:
+                if arg == "-c" or arg.startswith("-c"):
+                    raise ToolRuntimeError(
+                        "Inline code execution with 'python -c' is not allowed in workspace mode."
+                    )
+        elif cmd == "node":
+            for arg in parts[1:]:
+                if arg == "-e" or arg.startswith("-e"):
+                    raise ToolRuntimeError(
+                        "Inline code execution with 'node -e' is not allowed in workspace mode."
+                    )
+
+        if cmd == "git":
             for arg in parts[1:]:
                 if arg in BLOCKED_GIT_FLAGS:
                     raise ToolRuntimeError(f"Git flag is not allowed in workspace mode: {arg}")
