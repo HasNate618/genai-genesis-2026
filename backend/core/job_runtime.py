@@ -1542,11 +1542,12 @@ def _should_continue_after_coder_result(*, status: str, reason: str, committed: 
 
 
 def _should_attempt_task_fallback(*, status: str, reason: str, task_files: list[str]) -> bool:
+    # Only fall back on *genuine failures* with recoverable reasons.
+    # When the coder claims success but commits nothing, we do NOT stub: that
+    # case is handled upstream by coder_fail_count escalation so the pipeline
+    # retries properly instead of silently replacing LLM output with empty stubs.
     if _is_success_status(status):
-        return any(
-            _sanitize_relative_path(path) and not _is_placeholder_task_path(path)
-            for path in task_files
-        )
+        return False
     if not _is_coder_recoverable_failure_reason(reason):
         return False
     return any(

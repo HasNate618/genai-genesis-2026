@@ -19,6 +19,7 @@ from backend.core.job_runtime import (
     _qa_failure_reason_from_command,
     _resolve_github_repo_name,
     _simple_python_goal_tasks,
+    _should_attempt_task_fallback,
     _should_continue_after_coder_result,
     _is_success_status,
     _tasks_from_assignments,
@@ -458,4 +459,43 @@ def test_should_continue_after_coder_result_when_committed_changes_exist() -> No
         status="failed",
         reason="Tool execution failed with exit code 2",
         committed=False,
+    )
+
+
+def test_should_attempt_task_fallback_never_fires_on_success_status() -> None:
+    # Coder claims success but writes nothing → no stub, let the pipeline retry.
+    for success_status in ("completed", "success", "ok", "done"):
+        assert not _should_attempt_task_fallback(
+            status=success_status,
+            reason="",
+            task_files=["src/main.py", "src/utils.py"],
+        ), f"fallback should NOT fire for status={success_status!r}"
+
+
+def test_should_attempt_task_fallback_fires_on_recoverable_failure() -> None:
+    assert _should_attempt_task_fallback(
+        status="failed",
+        reason="no files were created or modified",
+        task_files=["src/main.py"],
+    )
+    assert _should_attempt_task_fallback(
+        status="error",
+        reason="output contract mismatch",
+        task_files=["src/app.py"],
+    )
+
+
+def test_should_attempt_task_fallback_does_not_fire_on_unrecoverable_failure() -> None:
+    assert not _should_attempt_task_fallback(
+        status="failed",
+        reason="Tool execution failed with exit code 2",
+        task_files=["src/main.py"],
+    )
+
+
+def test_should_attempt_task_fallback_does_not_fire_when_no_valid_files() -> None:
+    assert not _should_attempt_task_fallback(
+        status="failed",
+        reason="no files were written",
+        task_files=[],
     )
