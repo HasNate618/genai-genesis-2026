@@ -596,7 +596,7 @@ def _build_qa_result(
             "root_causes": [],
             "failed_commands": [],
         },
-        "next_action": "await_user_approval",
+        "next_action": "await_user_acceptance",
         "next_action_reason": "QA checks passed.",
     }
 
