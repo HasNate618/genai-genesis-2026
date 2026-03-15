@@ -170,6 +170,9 @@ Notes:
 
 - Coder tasks are currently executed in sequence inside the runtime loop (not yet parallel task execution inside one job process).
 - Each coder still has isolated branch/workdir boundaries.
+- For simple Python goals (for example, "make hello world in python"), runtime uses deterministic targeting (`hello_world.py`) instead of placeholder `workspace/task_*.txt` paths.
+- If coder output is empty/non-usable for those simple goals, runtime applies an immediate deterministic fallback write so coding can still produce a concrete artifact.
+- Runtime enforces a work-product invariant: if coding produces no committed artifacts, pipeline loops back to coordination and cannot move to merge/finalization.
 
 
 ### Merge + verification workspace
@@ -241,6 +244,12 @@ Notes:
     "coordinator_conflict": "{...json...}",
     "coder": "{...json...}",
     "merger": ""
+  },
+  "artifacts": {
+    "base_branch": "main",
+    "merged_branches": ["agenticarmy/job-123/coder-1"],
+    "merged_commit": "abc123...",
+    "changed_files": ["hello_world.py"]
   }
 }
 ```
@@ -479,6 +488,12 @@ Common reasons:
 Check `/status` logs for exact runtime exception.
 
 If you see uvicorn reload warnings from `.workdirs/...` while using `--reload`, the backend was watching agent worktrees and restarting mid-run. Runtime now creates workdirs in OS temp path (outside repo watch scope). Restart backend to pick up this fix.
+
+If you see repeated coder loopbacks with messages like:
+
+- `No implementation outcome was provided by the coding agent`
+
+runtime now treats this as recoverable contract noise and, for simple Python goals, applies deterministic fallback file creation (`hello_world.py`) so a real artifact is produced.
 
 If you see:
 

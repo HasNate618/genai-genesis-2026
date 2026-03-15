@@ -5,10 +5,13 @@ from fastapi.testclient import TestClient
 from backend.api.v1 import set_runtime
 from backend.core.job_runtime import (
     JobRuntime,
+    _detect_simple_python_target,
     _is_coder_recoverable_failure_reason,
     _is_contract_mismatch_reason,
     _is_no_change_reason,
+    _is_no_outcome_reason,
     _qa_failure_reason_from_command,
+    _simple_python_goal_tasks,
     _should_continue_after_coder_result,
     _is_success_status,
 )
@@ -194,6 +197,11 @@ def test_status_payload_contains_agent_results() -> None:
             "coder",
             "merger",
         }
+        assert "artifacts" in payload
+        assert payload["artifacts"]["base_branch"] == "main"
+        assert payload["artifacts"]["merged_branches"] == []
+        assert payload["artifacts"]["merged_commit"] == ""
+        assert payload["artifacts"]["changed_files"] == []
 
 
 def test_unknown_job_status_returns_failed_payload_for_polling() -> None:
@@ -209,6 +217,9 @@ def test_unknown_job_status_returns_failed_payload_for_polling() -> None:
             "coder",
             "merger",
         }
+        assert payload["artifacts"]["merged_branches"] == []
+        assert payload["artifacts"]["merged_commit"] == ""
+        assert payload["artifacts"]["changed_files"] == []
 
 
 def test_success_status_aliases_are_accepted() -> None:
@@ -236,6 +247,35 @@ def test_no_change_reason_is_recoverable() -> None:
     reason = "No implementation or file changes were provided for the assigned task."
     assert _is_no_change_reason(reason)
     assert _is_coder_recoverable_failure_reason(reason)
+
+
+def test_no_outcome_reason_is_recoverable() -> None:
+    reason = "No implementation outcome was provided by the coding agent."
+    assert _is_no_outcome_reason(reason)
+    assert _is_coder_recoverable_failure_reason(reason)
+
+
+def test_detect_simple_python_target_prefers_explicit_file_then_hello_world_default() -> None:
+    assert _detect_simple_python_target("Create hello world in python at scripts/greeter.py") == "scripts/greeter.py"
+    assert _detect_simple_python_target("Make hello world in python") == "hello_world.py"
+    assert _detect_simple_python_target("Create a python script at scripts/greeter.py") is None
+    assert _detect_simple_python_target("Write hello world in javascript") is None
+
+
+def test_detect_simple_python_target_matches_calculator_and_other_goals() -> None:
+    assert _detect_simple_python_target("Create a python terminal based calculator") == "calculator.py"
+    assert _detect_simple_python_target("Build a Python calculator at calc.py") == "calc.py"
+    assert _detect_simple_python_target("Make a python guessing game") == "guessing_game.py"
+    assert _detect_simple_python_target("Write a python command-line todo list") == "todo_list.py"
+    assert _detect_simple_python_target("Write a python terminal-based script") == "main.py"
+    assert _detect_simple_python_target("Build a web app with flask") is None
+
+
+def test_simple_python_goal_tasks_targets_single_file() -> None:
+    tasks = _simple_python_goal_tasks("hello_world.py")
+    assert len(tasks) == 1
+    assert tasks[0].file_paths == ["hello_world.py"]
+    assert tasks[0].agent_id == "coder-1"
 
 
 def test_qa_failure_reason_from_command_prefers_last_line() -> None:

@@ -103,21 +103,46 @@ class WorkdirRuntime:
         return True
 
     def merge_branches(self, *, base_branch: str, branches: Iterable[str]) -> None:
+        """Merge *branches* into *base_branch* using a disposable worktree.
+
+        This never checks out or modifies the user's main working tree, so it
+        is safe even when the repo has uncommitted changes.
+        """
         branches_to_merge = [
             branch for branch in self._normalize_branches(branches) if branch != base_branch
         ]
         if not branches_to_merge:
             return
 
-        current_ref = self._run_git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-        self._run_git(["checkout", base_branch])
+        merge_dir = self.workdir_root / "_merge-finalize"
+        merge_branch = "_agentic-merge-temp"
+
+        if merge_dir.exists():
+            self._run_git(["worktree", "remove", "--force", str(merge_dir)], check=False)
+            shutil.rmtree(merge_dir, ignore_errors=True)
+        merge_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        self._run_git(["worktree", "add", "-B", merge_branch, str(merge_dir), base_branch])
         try:
             for branch in branches_to_merge:
                 self._run_git(["rev-parse", "--verify", branch])
-                self._run_git(["merge", "--no-ff", "--no-edit", branch])
+                self._run_git(["-C", str(merge_dir), "merge", "--no-ff", "--no-edit", branch])
+
+            merged_sha = self._run_git(
+                ["-C", str(merge_dir), "rev-parse", "HEAD"]
+            ).stdout.strip()
+            self._run_git(["update-ref", f"refs/heads/{base_branch}", merged_sha])
         finally:
-            if current_ref and current_ref not in {base_branch, "HEAD"}:
-                self._run_git(["checkout", current_ref], check=False)
+            self._run_git(["worktree", "remove", "--force", str(merge_dir)], check=False)
+            shutil.rmtree(merge_dir, ignore_errors=True)
+            self._run_git(["branch", "-D", merge_branch], check=False)
+
+    def head_commit(self, ref: str = "HEAD") -> str:
+        return self._run_git(["rev-parse", ref]).stdout.strip()
+
+    def changed_files_in_ref(self, ref: str = "HEAD") -> list[str]:
+        output = self._run_git(["show", "--pretty=format:", "--name-only", ref]).stdout
+        return [line.strip() for line in output.splitlines() if line.strip()]
 
     def cleanup_job(self, job_id: str) -> None:
         contexts = self._contexts_by_job.get(job_id, [])

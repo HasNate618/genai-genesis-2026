@@ -32,6 +32,7 @@ class CreateJobRequest(BaseModel):
     github_token: str = ""
     github_repo: str = ""
     base_branch: str = Field(default="main", min_length=1)
+    workspace_path: str = ""
 
 
 class ReviewRequest(BaseModel):
@@ -58,6 +59,7 @@ async def create_job(payload: CreateJobRequest) -> dict[str, str]:
         github_token=payload.github_token.strip(),
         github_repo=payload.github_repo.strip(),
         base_branch=base_branch,
+        workspace_path=payload.workspace_path.strip(),
     )
     job_id = await _runtime.create_job(launch)
     _runtime.start_pipeline(job_id, launch)
@@ -106,6 +108,12 @@ async def get_status(job_id: str) -> dict:
                 "coordinator_conflict": "",
                 "coder": "",
                 "merger": "",
+            },
+            "artifacts": {
+                "base_branch": "main",
+                "merged_branches": [],
+                "merged_commit": "",
+                "changed_files": [],
             },
         }
 

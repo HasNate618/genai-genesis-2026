@@ -89,6 +89,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             return;
           }
           const keys = await this.secretManager.getAll();
+          const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
           const { job_id } = await this.backendClient.startJob({
             goal: msg.goal,
             coderCount: Number(msg.coderCount) || 2,
@@ -97,6 +98,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             baseBranch: 'main',
             geminiKey: keys.gemini,
             moorchehKey: keys.moorcheh,
+            workspacePath,
           });
           this.currentJobId = job_id;
           post({ command: 'runStarted', jobId: job_id });

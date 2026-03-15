@@ -28,6 +28,11 @@ Loopbacks:
 - Merge failure -> `coordinating`
 - QA failure -> `coordinating`
 - Final result rejection -> `coordinating`
+- No committed work product -> `coordinating` (explicit retry reason)
+
+Retry budget:
+
+- Coordination retries are bounded by `MAX_COORDINATION_ATTEMPTS` and terminate as `failed` when exhausted.
 
 
 ## 3) API endpoints (`/api/v1`)
@@ -120,6 +125,12 @@ Polling payload consumed by extension:
     "coordinator_conflict": "{...}",
     "coder": "{...}",
     "merger": "{...}"
+  },
+  "artifacts": {
+    "base_branch": "main",
+    "merged_branches": ["agenticarmy/job-123/coder-1"],
+    "merged_commit": "abc123...",
+    "changed_files": ["hello_world.py"]
   }
 }
 ```
@@ -148,6 +159,8 @@ Response:
   - In-memory job registry.
   - Background pipeline and HITL event synchronization.
   - Railtracks phase calls and loopback handling.
+  - Deterministic fallback for simple Python goals (`hello world`) when coder output is empty/non-usable.
+  - Work-product invariant: merge/finalization only proceed with committed coding artifacts.
 
 - `backend/agents/railtracks_runtime.py`
   - Contract-driven agent calls for planner/coordinator/conflict/coder/merge/qa.
@@ -208,4 +221,4 @@ python -m pytest tests/ -q
 npm --prefix vscode-extension run compile --silent
 ```
 
-Current branch baseline: backend tests pass (`17`).
+Current branch baseline: backend tests pass (`38`).

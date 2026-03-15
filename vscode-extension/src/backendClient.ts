@@ -8,6 +8,7 @@ export interface RunConfig {
   baseBranch?: string;
   geminiKey?: string;
   moorchehKey?: string;
+  workspacePath?: string;
 }
 
 export interface JobStatus {
@@ -15,6 +16,12 @@ export interface JobStatus {
   logs: string[];
   agentStates: Record<string, string>;
   agentResults?: Record<string, string>;
+  artifacts?: {
+    base_branch?: string;
+    merged_branches?: string[];
+    merged_commit?: string;
+    changed_files?: string[];
+  };
 }
 
 export interface PlanStatus {
@@ -42,6 +49,7 @@ export class BackendClient {
         github_token: config.githubToken,
         github_repo: config.githubRepo ?? '',
         base_branch: config.baseBranch ?? 'main',
+        workspace_path: config.workspacePath ?? '',
       }),
     });
 

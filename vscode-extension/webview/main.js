@@ -8,6 +8,7 @@ let pendingHitL1 = false;
 let pendingHitL2 = false;
 let isGeminiSet = false;
 let isMoorchehSet = false;
+let lastArtifactSignature = '';
 
 // ── DOM refs ──────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -292,6 +293,19 @@ function applyStatus(status, planPayload) {
 
   if (status.status === 'done') {
     resetAgents(); setAgentState('merger', 'done');
+    const artifacts = status.artifacts || {};
+    const changed = Array.isArray(artifacts.changed_files) ? artifacts.changed_files : [];
+    const commit = artifacts.merged_commit || '';
+    const signature = `${commit}|${changed.join(',')}`;
+    if (signature && signature !== lastArtifactSignature) {
+      if (commit) {
+        appendLog(`Merged commit: ${commit}`, 'success');
+      }
+      if (changed.length) {
+        appendLog(`Changed files: ${changed.join(', ')}`, 'info');
+      }
+      lastArtifactSignature = signature;
+    }
     appendLog('✅ Pipeline complete!', 'success');
     resetLaunchButton();
   }
@@ -320,6 +334,7 @@ window.addEventListener('message', ({ data: msg }) => {
 
     case 'runStarted':
       currentJobId = msg.jobId;
+      lastArtifactSignature = '';
       jobIdDisplay.textContent = msg.jobId;
       jobInfo.classList.remove('hidden');
       resetAgents(); setAgentState('planner', 'running');
