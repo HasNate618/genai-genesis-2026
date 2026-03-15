@@ -8,6 +8,8 @@ let pendingHitL1 = false;
 let pendingHitL2 = false;
 let isGeminiSet = false;
 let isMoorchehSet = false;
+let lastArtifactSignature = '';
+let currentWorkspacePath = '';
 
 // Track which agent accordions are expanded
 const expandedAgents = { planner: false, conflict_manager: false, coder: false, verification: false };
@@ -131,6 +133,27 @@ function createKeyItem(name, keyId) {
   return div;
 }
 
+// ── Repo path ─────────────────────────────────────────────────────
+const repoPathDisplay = $('repo-path-display');
+const browseRepoBtn = $('browse-repo-btn');
+
+function setRepoPath(p) {
+  currentWorkspacePath = p || '';
+  if (currentWorkspacePath) {
+    repoPathDisplay.textContent = currentWorkspacePath;
+    repoPathDisplay.title = currentWorkspacePath;
+    repoPathDisplay.classList.remove('unset');
+  } else {
+    repoPathDisplay.textContent = 'No workspace open';
+    repoPathDisplay.title = '';
+    repoPathDisplay.classList.add('unset');
+  }
+}
+
+browseRepoBtn.addEventListener('click', () => {
+  vscode.postMessage({ command: 'browseFolder' });
+});
+
 // ── Goal ──────────────────────────────────────────────────────────
 coderSlider.addEventListener('input', () => {
   coderDisplay.textContent = coderSlider.value;
@@ -139,14 +162,21 @@ coderSlider.addEventListener('input', () => {
 launchBtn.addEventListener('click', () => {
   const goal = goalInput.value.trim();
   if (!goal) { showNotification('Please enter a goal.', 'error'); return; }
+  if (!currentWorkspacePath) { showNotification('Select a target repo first.', 'error'); return; }
   launchBtn.disabled = true;
   launchBtn.textContent = 'Launching…';
   vscode.postMessage({
     command: 'startRun',
     goal,
     coderCount: parseInt(coderSlider.value, 10),
+    workspacePath: currentWorkspacePath,
   });
 });
+
+function resetLaunchButton() {
+  launchBtn.disabled = false;
+  launchBtn.textContent = '🚀 Launch Agents';
+}
 
 // ── Review (HitL Gates) ───────────────────────────────────────────
 // Plan Review (HitL 1)
@@ -296,18 +326,18 @@ $('scroll-bottom-btn').addEventListener('click', () => {
 // ── Agent state helpers ───────────────────────────────────────────
 const AGENT_MAP = {
   planner: 'agent-planner', 
-  conflict_manager: 'agent-conflict-manager',
+  coordinator_conflict: 'agent-coordinator-conflict',
   coder: 'agent-coder', 
-  verification: 'agent-verification'
+  merger: 'agent-merger'
 };
 
 const STAGE_AGENT = {
   planning: 'planner', 
   awaiting_plan_approval: 'planner',
-  coordinating: 'conflict_manager', 
+  coordinating: 'coordinator_conflict', 
   coding: 'coder', 
-  verifying: 'verification', 
-  review_ready: 'verification'
+  verifying: 'merger', 
+  review_ready: 'merger'
 };
 
 function setAgentState(key, state) {
@@ -339,7 +369,7 @@ function applyStatus(status, planPayload) {
 
   const active = STAGE_AGENT[status.status];
   if (active) {
-    const order = ['planner', 'conflict_manager', 'coder', 'verification'];
+    const order = ['planner', 'coordinator_conflict', 'coder', 'merger'];
     const idx = order.indexOf(active);
     order.forEach((a, i) => setAgentState(a, i < idx ? 'done' : i === idx ? 'running' : 'idle'));
   }
@@ -383,13 +413,26 @@ function applyStatus(status, planPayload) {
   }
 
   if (status.status === 'done') {
-    resetAgents(); setAgentState('verification', 'done');
+    resetAgents(); setAgentState('merger', 'done');
+    const artifacts = status.artifacts || {};
+    const changed = Array.isArray(artifacts.changed_files) ? artifacts.changed_files : [];
+    const commit = artifacts.merged_commit || '';
+    const signature = `${commit}|${changed.join(',')}`;
+    if (signature && signature !== lastArtifactSignature) {
+      if (commit) {
+        appendLog(`Merged commit: ${commit}`, 'success');
+      }
+      if (changed.length) {
+        appendLog(`Changed files: ${changed.join(', ')}`, 'info');
+      }
+      lastArtifactSignature = signature;
+    }
     appendLog('✅ Pipeline complete!', 'success');
-    launchBtn.disabled = false; launchBtn.textContent = '🚀 Launch Agents';
+    resetLaunchButton();
   }
   if (status.status === 'failed') {
     appendLog('❌ Pipeline failed.', 'error');
-    launchBtn.disabled = false; launchBtn.textContent = '🚀 Launch Agents';
+    resetLaunchButton();
   }
 
   if (status.logs?.length > logEntries.length) {
@@ -407,11 +450,16 @@ window.addEventListener('message', ({ data: msg }) => {
       updateSavedKeysList(msg.geminiKeySet, msg.moorchehKeySet);
       break;
 
+    case 'workspacePath':
+      setRepoPath(msg.path);
+      break;
+
     case 'notification':
       showNotification(msg.text, msg.type); break;
 
     case 'runStarted':
       currentJobId = msg.jobId;
+      lastArtifactSignature = '';
       jobIdDisplay.textContent = msg.jobId;
       jobInfo.classList.remove('hidden');
       resetAgents(); setAgentState('planner', 'running');
@@ -430,6 +478,10 @@ window.addEventListener('message', ({ data: msg }) => {
       $('backend-status-text').textContent = 'Online';
       break;
 
+    case 'runStartFailed':
+      resetLaunchButton();
+      break;
+
     case 'statusUpdate':
       applyStatus(msg.status, msg.plan); break;
   }
@@ -437,3 +489,6 @@ window.addEventListener('message', ({ data: msg }) => {
 
 // ── Init ──────────────────────────────────────────────────────────
 switchTab('settings');
+// Initialize empty; the extension will push the real workspace path via postMessage('workspacePath').
+// Avoid treating unresolved template placeholders (e.g. '{{WORKSPACE_PATH}}') as real paths.
+setRepoPath('');

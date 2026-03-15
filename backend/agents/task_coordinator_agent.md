@@ -54,7 +54,9 @@ Given an approved plan and agent metadata, you must:
       "assigned_agent_role": "string",
       "phase": "execution",
       "depends_on": ["task-00"],
-      "rationale": "short explanation"
+      "rationale": "short explanation",
+      "predicted_files": ["relative/path.py", "README.md"],
+      "predicted_components": ["module_or_component_name"]
     }
   ],
   "loop_context_applied": true,
@@ -79,6 +81,8 @@ On failure:
 ## Quality Checks
 - Every required task is assigned or explicitly blocked with reason.
 - No dependency cycles in assignments.
+- Every assignment includes at least one concrete repo-relative path in `predicted_files`.
+- Do **not** use placeholder paths such as `workspace/task_1.txt`.
 - `next_action` is always `send_to_conflict_analysis` on success.
 
 ## Behavior Boundaries

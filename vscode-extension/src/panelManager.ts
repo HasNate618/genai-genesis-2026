@@ -3,8 +3,9 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { SecretManager } from './secretManager';
 import { BackendClient } from './backendClient';
+import { getGitHubAccessToken } from './githubAuth';
 
-type TabId = 'settings' | 'goal' | 'approval' | 'agents' | 'logs';
+type TabId = 'settings' | 'goal' | 'review' | 'agents' | 'logs';
 
 export class PanelManager {
   private panel: vscode.WebviewPanel | undefined;
@@ -57,6 +58,13 @@ export class PanelManager {
       this.context.subscriptions
     );
 
+    // Workspace path is baked into the HTML via {{WORKSPACE_PATH}} templating,
+    // so no initial postMessage is needed. Keep the subscription so the UI
+    // updates if the user opens/closes a folder while the panel is visible.
+    this.context.subscriptions.push(
+      vscode.workspace.onDidChangeWorkspaceFolders(() => this.sendWorkspacePath())
+    );
+
     this.panel.onDidDispose(() => {
       this.dispose();
     });
@@ -78,7 +86,18 @@ export class PanelManager {
     });
   }
 
+  private sendWorkspacePath(): void {
+    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+    this.panel?.webview.postMessage({ command: 'workspacePath', path: workspacePath });
+  }
+
   private async handleMessage(msg: any): Promise<void> {
+    const post = (payload: any) => this.panel?.webview.postMessage(payload);
+    const failRunStart = (text: string) => {
+      post({ command: 'notification', type: 'error', text });
+      post({ command: 'runStartFailed' });
+    };
+
     switch (msg.command) {
       case 'saveKeys':
         await this.secretManager.storeAll({
@@ -86,51 +105,56 @@ export class PanelManager {
           moorcheh: msg.moorchehKey || undefined,
         });
         await this.sendStoredKeys();
-        this.panel?.webview.postMessage({
-          command: 'notification',
-          type: 'success',
-          text: 'API keys saved securely ✓',
-        });
+        post({ command: 'notification', type: 'success', text: 'API keys saved securely ✓' });
         break;
 
+      case 'browseFolder': {
+        const uris = await vscode.window.showOpenDialog({
+          canSelectFolders: true,
+          canSelectFiles: false,
+          canSelectMany: false,
+          openLabel: 'Select Target Repo',
+          title: 'Select the repo the agents should work on',
+        });
+        if (uris && uris.length > 0) {
+          post({ command: 'workspacePath', path: uris[0].fsPath });
+        }
+        break;
+      }
+
       case 'startRun': {
-        const keys = await this.secretManager.getAll();
-        if (!keys.gemini) {
-          this.panel?.webview.postMessage({
-            command: 'notification',
-            type: 'error',
-            text: 'Please save your Gemini API key in Settings first.',
-          });
-          return;
-        }
-
-        // Check backend is alive
-        const alive = await this.backendClient.ping();
-        if (!alive) {
-          this.panel?.webview.postMessage({
-            command: 'notification',
-            type: 'error',
-            text: 'Backend not reachable. Is the FastAPI server running on port 8000?',
-          });
-          return;
-        }
-
         try {
+          const githubToken = await getGitHubAccessToken();
+
+          const alive = await this.backendClient.ping();
+          if (!alive) {
+            failRunStart('Backend not reachable. Is the FastAPI server running on port 8000?');
+            return;
+          }
+
+          const keys = await this.secretManager.getAll();
+          const activeWorkspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+          const requestedWorkspacePath = typeof msg.workspacePath === 'string' ? msg.workspacePath.trim() : '';
+          const workspacePath = requestedWorkspacePath || activeWorkspacePath;
+          if (!workspacePath || !fs.existsSync(workspacePath) || !fs.statSync(workspacePath).isDirectory()) {
+            failRunStart('Open a target workspace folder before launching.');
+            return;
+          }
           const { job_id } = await this.backendClient.startJob({
             goal: msg.goal,
-            coderCount: msg.coderCount,
+            coderCount: Number(msg.coderCount) || 2,
+            githubToken,
+            githubRepo: '',
+            baseBranch: 'main',
             geminiKey: keys.gemini,
-            moorchehKey: keys.moorcheh ?? '',
+            moorchehKey: keys.moorcheh,
+            workspacePath,
           });
           this.currentJobId = job_id;
-          this.panel?.webview.postMessage({ command: 'runStarted', jobId: job_id });
+          post({ command: 'runStarted', jobId: job_id });
           this.startPolling(job_id);
         } catch (err: any) {
-          this.panel?.webview.postMessage({
-            command: 'notification',
-            type: 'error',
-            text: `Failed to start: ${err.message}`,
-          });
+          failRunStart(`Failed to start: ${err?.message ?? String(err)}`);
         }
         break;
       }
@@ -139,13 +163,13 @@ export class PanelManager {
         if (!this.currentJobId) return;
         try {
           await this.backendClient.reviewPlan(this.currentJobId, msg.approved, msg.feedback);
-          this.panel?.webview.postMessage({
+          post({
             command: 'notification',
             type: 'success',
             text: msg.approved ? 'Plan approved — execution starting!' : 'Feedback sent to Planner...',
           });
         } catch (err: any) {
-          this.panel?.webview.postMessage({
+          post({
             command: 'notification',
             type: 'error',
             text: `Approval error: ${err.message}`,
@@ -158,13 +182,13 @@ export class PanelManager {
         if (!this.currentJobId) return;
         try {
           await this.backendClient.reviewResult(this.currentJobId, msg.approved, msg.feedback);
-          this.panel?.webview.postMessage({
+          post({
             command: 'notification',
             type: 'success',
             text: msg.approved ? 'PR approved — checking out and merging!' : 'Feedback sent to Coder...',
           });
         } catch (err: any) {
-          this.panel?.webview.postMessage({
+          post({
             command: 'notification',
             type: 'error',
             text: `Approval error: ${err.message}`,
@@ -176,7 +200,7 @@ export class PanelManager {
       case 'deleteKey':
         await this.secretManager.delete(msg.key);
         await this.sendStoredKeys();
-        this.panel?.webview.postMessage({
+        post({
           command: 'notification',
           type: 'success',
           text: `${msg.key === 'gemini' ? 'Gemini' : 'Moorcheh'} key deleted.`,
@@ -188,14 +212,22 @@ export class PanelManager {
   private startPolling(jobId: string): void {
     this.stopPolling();
     let lastStatus = '';
+    let cachedPlan: string | undefined;
     this.pollInterval = setInterval(async () => {
       try {
         const status = await this.backendClient.getStatus(jobId);
-        
-        let planPayload = undefined;
-        if (status.status === 'awaiting_plan_approval' && lastStatus !== 'awaiting_plan_approval') {
-          const planData = await this.backendClient.getPlan(jobId);
-          planPayload = planData.plan;
+
+        let planPayload: string | undefined;
+        if (status.status === 'awaiting_plan_approval') {
+          if (lastStatus !== 'awaiting_plan_approval' || !cachedPlan) {
+            try {
+              const planData = await this.backendClient.getPlan(jobId);
+              cachedPlan = planData.plan;
+            } catch {
+              // Keep polling status even if plan fetch fails this cycle.
+            }
+          }
+          planPayload = cachedPlan;
         }
         lastStatus = status.status;
 
@@ -235,10 +267,16 @@ export class PanelManager {
     );
 
     let html = fs.readFileSync(htmlPath, 'utf8');
+
+    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+    // Escape for embedding in a JS string literal inside the HTML.
+    const escapedPath = workspacePath.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
     html = html
       .replace(/{{CSP_SOURCE}}/g, webview.cspSource)
       .replace(/{{CSS_URI}}/g, cssUri.toString())
-      .replace(/{{JS_URI}}/g, jsUri.toString());
+      .replace(/{{JS_URI}}/g, jsUri.toString())
+      .replace(/{{WORKSPACE_PATH}}/g, escapedPath);
 
     return html;
   }

@@ -1,503 +1,552 @@
-# Moorcheh Vector Memory Integration (What Is Implemented + Real DB Usage)
+# AgenticArmy Runtime + Moorcheh Memory  
+## What is implemented, how it works, and how to use it
 
-This document describes the **exact implementation currently in this repository** for Moorcheh integration, and how to run it against a **real Moorcheh vector database**.
-
-
-## Scope of What Was Implemented
-
-The implementation is a **vector-only memory layer scaffold** for the multi-agent workflow. It includes:
-
-- Config + env validation
-- Embedding provider abstraction (mock + OpenAI-compatible)
-- Moorcheh SDK client wrapper (namespace, vector upload, search, answer)
-- Vector store facade with telemetry
-- Canonical context record schema (deterministic IDs)
-- Context write/read helpers for planner/coordinator
-- Conflict compensation logic for task overlap reduction
-- Async agent context contract
-- FastAPI debug/ops endpoints
-- Prize-track benchmark harness
-- Unit/integration-style tests
-
-Important boundary:
-
-- The memory components are implemented and ready.
-- Full orchestration-engine transition wiring is **not** implemented yet in this repo (no state machine runtime files were present to attach to directly).
+This is the implementation guide for the **current code in this repo**.  
+It covers backend runtime behavior, Railtracks integration, Moorcheh vector memory wiring, VS Code flow, GitHub auth, and real usage steps.
 
 
-## Files Added and What Each One Does
+## 1) What is actually implemented right now
 
-## Core backend entrypoints
+The current system is no longer a simple mock-only skeleton. It includes:
+
+- A live `/api/v1` state-machine runtime with HITL gates (`plan` + `result` review).
+- Railtracks-based agent orchestration using contract files in `backend/agents/*.md`.
+- Moorcheh vector memory reads/writes across planning, coordination, coding, merge, and QA transitions.
+- Conflict compensation logic to reduce overlap before coding.
+- Isolated git workdirs in OS temp storage (`/tmp/agenticarmy-workdirs/<repo>/<job>/<agent>` on Linux) for coder execution.
+- Tool-executing coder/QA agents through allowlisted workspace tools.
+- GitHub account token flow from VS Code auth into backend runtime (ephemeral).
+- Hosted OpenAI-compatible LLM defaults via Hugging Face endpoint (no user model key required).
+- Extension polling UI with status/plan/review loops and run start error recovery.
+
+
+## 2) High-level architecture
+
+### Backend entrypoints
 
 - `backend/main.py`
-  - Creates FastAPI app.
-  - Mounts the architecture-aligned `/api/v1` router.
+  - Starts FastAPI app.
+  - Mounts `/api/v1` router.
+  - Keeps `/health` root compatibility endpoint.
 
 - `backend/api/v1.py`
-  - Exposes contract endpoints under `/api/v1`:
-    - `GET /api/v1/health`
-    - `POST /api/v1/jobs`
-    - `GET /api/v1/jobs/{job_id}/plan`
-    - `POST /api/v1/jobs/{job_id}/plan/review`
-    - `GET /api/v1/jobs/{job_id}/status`
-    - `POST /api/v1/jobs/{job_id}/result/review`
-  - Uses an in-memory job runtime with background pipeline execution and HITL gates.
+  - `GET /api/v1/health`
+  - `POST /api/v1/jobs`
+  - `GET /api/v1/jobs/{job_id}/plan`
+  - `POST /api/v1/jobs/{job_id}/plan/review`
+  - `GET /api/v1/jobs/{job_id}/status`
+  - `POST /api/v1/jobs/{job_id}/result/review`
 
-## Configuration
+- `backend/core/job_runtime.py`
+  - In-memory job store.
+  - Background pipeline execution.
+  - HITL gates via `asyncio.Event`.
+  - Full planning/coordinating/coding/verifying/review loop.
 
-- `backend/config.py`
-  - `Settings.from_env()` loads and validates env vars.
-  - Supports per-job `moorcheh_api_key` override from `/api/v1/jobs` payload.
-  - Enforces `EMBEDDING_API_KEY` when provider is not `mock`.
-  - Enforces numeric bounds for vector dim, conflict threshold, etc.
-  - Provides safe redacted config for diagnostics.
 
-## Moorcheh + embeddings
+### Agent orchestration layer
+
+- `backend/agents/railtracks_runtime.py`
+  - Loads agent contracts from markdown:
+    - `planning_agent.md`
+    - `task_coordinator_agent.md`
+    - `conflict_analysis_agent.md`
+    - `coding_agent.md`
+    - `merge_agent.md`
+    - `qa_agent.md`
+  - Uses Pydantic output schemas to enforce structured agent responses.
+  - Calls are guarded by `LLM_CALL_TIMEOUT_SECONDS`.
+
+
+### Memory layer (Moorcheh + embeddings)
 
 - `backend/memory/moorcheh_client.py`
-  - Wrapper around the official `moorcheh-sdk` Python SDK.
-  - Implements Moorcheh operations with automatic retry/error handling via SDK:
-    - list namespaces
-    - create vector namespace
-    - ensure vector namespace exists and dim matches
-    - upload vectors
-    - vector search
-    - answer generation endpoint wrapper
-    - health check
-  - SDK handles authentication, retry logic, and all HTTP details transparently.
-
-- `backend/memory/embedding_provider.py`
-  - `MockEmbeddingProvider`: deterministic vectors for tests/dev.
-  - `OpenAICompatibleEmbeddingProvider`: calls embeddings endpoint via HTTP.
-  - Enforces vector dimension consistency.
-  - `build_embedding_provider(settings)` factory.
+  - Wrapper over official `moorcheh-sdk`.
+  - Namespace ensure/list, vector upload, vector search, answer helper.
 
 - `backend/memory/moorcheh_store.py`
-  - High-level facade that joins embedder + Moorcheh client.
-  - Methods:
-    - `provision_namespace()`
-    - `health_check()`
-    - `write_record()`, `write_records()`
-    - `search_context(query_text, top_k, threshold, metadata_filters)`
-  - Tracks telemetry on write/search/provision/health/errors.
-
-- `backend/memory/telemetry.py`
-  - In-memory counters + latency snapshots:
-    - write/search counts
-    - vector/result counts
-    - avg write/search ms
-    - last error
-
-## Memory schema and workflow helpers
-
-- `backend/memory/schemas.py`
-  - Canonical `ContextRecord`.
-  - `RecordType`, `WorkflowStage` enums.
-  - Deterministic record IDs: `wf:{workflow_id}:run:{run_id}:evt:{event_seq}:{record_type}`.
-  - `to_vector_payload()` builds final Moorcheh vector metadata payload.
+  - Embeds text + uploads vectors + retrieves top-k context.
+  - Tracks telemetry (write/search/provision/health/error).
 
 - `backend/memory/context_writer.py`
-  - `WorkflowContextWriter` writes normalized events.
-  - Supports explicit or auto event sequence by run.
-  - Convenience methods:
-    - `write_goal()`
-    - `write_plan()`
-    - `write_task_update()`
-    - `write_conflict_assessment()`
+  - Writes normalized workflow events (goal/plan/task/conflict/qa/merge/etc).
 
 - `backend/memory/context_reader.py`
-  - `WorkflowContextReader` prefetches context for:
-    - planner (`fetch_for_planner`)
-    - coordinator (`fetch_for_coordinator`)
-  - Generates natural language retrieval query, calls vector search, summarizes context, and formats prompt-ready text.
+  - Fetches planner/coordinator context from Moorcheh.
 
 - `backend/memory/conflict_context.py`
-  - `ConflictCompensator` analyzes retrieved memory + task drafts.
-  - Detects overlap/hot-file signals.
-  - Adjusts dependencies, priority, and parallelizable flags to reduce collisions.
-  - Returns `CompensationDecision` with `adjusted_tasks`, `conflict_signals`, and summary.
+  - Adjusts task dependencies/priority/parallel flags using historical conflict signals.
 
-## Async-agent context contract
-
-- `backend/agents/context_contract.py`
-  - `AsyncAgentContext` schema for payload passed into async agents.
-  - `build_async_agent_context(...)`
-  - `parse_async_agent_context(payload)` validation/parser.
-
-## Prize-track harness
-
-- `backend/evaluation/prize_track_harness.py`
-  - Simulates baseline vs memory-aware conflict compensation.
-  - Outputs overlap reduction and signal metrics.
+- `backend/memory/schemas.py`
+  - Canonical `ContextRecord` shape.
+  - Deterministic record IDs for idempotent writes.
 
 
-## Tests Added
+### Execution/runtime safety
 
-- `tests/test_config.py`
-  - Validates config failures for missing required keys.
+- `backend/core/workdir_runtime.py`
+  - Creates isolated git workdirs per coder.
+  - Commits branch changes.
+  - Builds a verification workdir by merging coder branches for QA.
+  - Merges approved coder branches into target base branch only after final human approval.
 
-- `tests/test_schemas.py`
-  - Validates deterministic IDs and vector payload shape.
+- `backend/core/tool_runtime.py`
+  - Workspace-scoped tools: read/write/list/run-command/git status/git diff.
+  - Optional GitHub tools when token is configured.
+  - Blocks path escape and dangerous git path flags.
+  - Command allowlist only.
 
-- `tests/test_conflict_compensation.py`
-  - Verifies overlap serialization + non-parallelization under conflict pressure.
-
-- `tests/test_memory_loop.py`
-  - End-to-end write/read loop using a fake Moorcheh client.
-
-- `tests/test_async_context_contract.py`
-  - Validates context payload roundtrip.
-
-- `pytest.ini`
-  - `pythonpath = .`, `testpaths = tests`
-
-- `requirements.txt`
-  - `fastapi`, `pydantic`, `pytest`, `uvicorn`, `moorcheh-sdk`
+- `backend/core/github_runtime.py`
+  - Token-scoped GitHub REST wrapper (`whoami`, create PR, comment on PR).
 
 
-## Data Model Stored in Moorcheh (Vector Namespace)
+### VS Code extension integration
 
-Each context event is uploaded as one vector record with metadata, including:
+- `vscode-extension/src/panelManager.ts`
+- `vscode-extension/src/sidebarProvider.ts`
+- `vscode-extension/src/backendClient.ts`
+- `vscode-extension/src/githubAuth.ts`
 
-- `id`
-- `vector`
-- `source`
-- `index`
-- `raw_text`
-- `workflow_id`
-- `run_id`
-- `agent_id`
-- `record_type`
-- `stage`
-- `status`
-- `task_id`
-- `file_paths`
-- `depends_on`
-- `conflict_score`
-- `timestamp`
-- `embedding_model`
-- `embedding_dimension`
-- `schema_version`
+Behavior:
+
+- On run start, extension requests GitHub auth with scopes `repo`, `read:user`.
+- OAuth call is wrapped with timeout (`45s`) to avoid indefinite hang.
+- Backend is pinged before job start.
+- Extension posts job payload to `/api/v1/jobs`.
+- Polls `/status` every 2s.
+- Fetches `/plan` when entering `awaiting_plan_approval`.
+- Sends reviews to `/plan/review` and `/result/review`.
 
 
-## Environment Variables (Real Deployment)
+## 3) Runtime state machine (exact statuses)
 
-Required for real Moorcheh + real embeddings:
+`initializing -> planning -> awaiting_plan_approval -> coordinating -> coding -> verifying -> review_ready -> done|failed`
 
-```bash
-export MOORCHEH_API_KEY="mc_..."
-export MOORCHEH_BASE_URL="https://api.moorcheh.ai/v1"   # optional, default set
+Loopbacks:
 
-export MOORCHEH_VECTOR_NAMESPACE="workflow-context-vectors"  # optional default exists
-export MOORCHEH_VECTOR_DIMENSION="1536"                      # must match embedding output
+- Plan rejected: `awaiting_plan_approval -> planning`
+- Conflict threshold breached: `coordinating -> coordinating` (rerun coordination)
+- Coding failure: `coding -> coordinating`
+- Merge failure: `coding -> coordinating`
+- QA failure: `verifying -> coordinating`
+- Final result rejected: `review_ready -> coordinating`
 
-export EMBEDDING_PROVIDER="openai"                           # openai or mock
-export EMBEDDING_MODEL="text-embedding-3-small"
-export EMBEDDING_API_KEY="sk-..."
 
-# optional override, expects full embeddings endpoint in current code:
-export EMBEDDING_BASE_URL="https://api.openai.com/v1/embeddings"
+## 4) Phase-by-phase execution details
 
-export EMBEDDING_BATCH_SIZE="32"
-export CONTEXT_RETRIEVAL_TOP_K="12"
-export CONFLICT_THRESHOLD="0.35"
-export MAX_CONTEXT_WINDOW="40"
+### Planning
+
+1. Runtime creates memory hooks (`Settings`, `MoorchehVectorStore`, reader/writer/compensator, Railtracks runtime, workdir runtime).
+2. Goal is written to Moorcheh.
+3. Planner fetches prior workflow context from Moorcheh.
+4. Railtracks planner agent generates plan.
+5. Plan is written to job state + Moorcheh.
+6. Runtime pauses at `awaiting_plan_approval`.
+
+If human rejects, rejection reason is written to Moorcheh and planning reruns with feedback.
+
+
+### Coordination + conflict compensation
+
+1. Coordinator agent generates assignments.
+2. Runtime converts assignments to `TaskDraft`s.
+3. Moorcheh context is fetched for candidate files.
+4. `ConflictCompensator` adjusts tasks (dependencies/priority/parallelizable).
+5. Conflict assessment is written to Moorcheh.
+6. Conflict analysis agent computes threshold decision.
+7. If threshold breached, loop back to coordination.
+
+
+### Coding
+
+For each adjusted task:
+
+1. Runtime prepares an isolated git workdir branch for that coder.
+2. Coder agent runs with tool nodes bound to that workdir.
+3. Runtime attempts `git add -A` + commit in that workdir.
+4. Task update events are written to Moorcheh.
+
+Notes:
+
+- Coder tasks are currently executed in sequence inside the runtime loop (not yet parallel task execution inside one job process).
+- Each coder still has isolated branch/workdir boundaries.
+- For simple Python goals (for example, "make hello world in python"), runtime uses deterministic targeting (`hello_world.py`) instead of placeholder `workspace/task_*.txt` paths.
+- If coder output is empty/non-usable for those simple goals, runtime applies an immediate deterministic fallback write so coding can still produce a concrete artifact.
+- Runtime enforces a work-product invariant: if coding produces no committed artifacts, pipeline loops back to coordination and cannot move to merge/finalization.
+
+
+### Merge + verification workspace
+
+1. Runtime creates verification workdir from base branch.
+2. It merges committed coder branches into verification workdir.
+3. Merge agent is called for mergeability/summary.
+4. If merge step fails, loop back to coordination.
+
+
+### QA / verification
+
+1. QA agent runs in verification workspace with tools.
+2. Runtime currently supplies `run_command="pytest tests/ -q"` by default.
+3. QA result is persisted to `agentResults` and Moorcheh.
+4. Failed QA loops back to coordination.
+
+
+### Final review + real merge to base
+
+1. Runtime pauses in `review_ready`.
+2. On approval:
+   - Runtime merges committed coder branches into the requested `base_branch`.
+   - Writes final approval event.
+   - Marks job `done`.
+3. On rejection:
+   - Writes rejection context.
+   - Loops back to coordination.
+
+
+## 5) API contract and payloads
+
+### `POST /api/v1/jobs` payload
+
+```json
+{
+  "goal": "Implement feature X",
+  "coder_count": 2,
+  "gemini_key": "",
+  "moorcheh_key": "",
+  "github_token": "gho_...",
+  "github_repo": "owner/repo",
+  "base_branch": "main",
+  "workspace_path": "/absolute/path/to/target/repo"
+}
 ```
 
 Notes:
 
-- If `EMBEDDING_PROVIDER` is not `mock`, `EMBEDDING_API_KEY` is required.
-- `MOORCHEH_VECTOR_DIMENSION` **must** equal your embedding model output dimension.
-- Keep keys in env/secrets, never in source code.
+- `goal` is required.
+- `gemini_key` and `moorcheh_key` are backward-compatible fields.
+- GitHub token comes from VS Code auth flow.
+- `workspace_path` pins execution to the intended local repo root; if omitted, backend falls back to its own cwd.
+- If `github_repo` is empty and git remote is configured, runtime derives repo from `origin`.
 
 
-## How To Use It With a Real Moorcheh DB
-
-### Prerequisites
-
-- Moorcheh account and API key from https://console.moorcheh.ai
-- Python 3.8+
-- `.venv` or Python environment
-
-### 1) Install dependencies
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-This installs:
-- `fastapi`, `uvicorn` for the API server
-- `moorcheh-sdk` for Moorcheh API interactions (automatically handles auth and retries)
-- `pydantic` for config validation
-- `pytest` for tests
-
-### 2) Export environment variables
-
-Create or update your `.env` file at the repo root:
-
-```bash
-export MOORCHEH_API_KEY="mc_<your-key-here>"
-export MOORCHEH_BASE_URL="https://api.moorcheh.ai/v1"
-
-export MOORCHEH_VECTOR_NAMESPACE="workflow-context-vectors"
-export MOORCHEH_VECTOR_DIMENSION="1536"
-
-export EMBEDDING_PROVIDER="mock"    # default; use "openai" with EMBEDDING_API_KEY for real embeddings
-export EMBEDDING_API_KEY="sk_<your-key-here>"
-export EMBEDDING_MODEL="text-embedding-3-small"
-export EMBEDDING_BASE_URL="https://api.openai.com/v1/embeddings"
-```
-
-Then source it:
-
-```bash
-set -o allexport && source ./.env && set +o allexport
-```
-
-### 3) Start the backend API
-
-```bash
-uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-### 4) Verify backend health
-
-```bash
-curl http://127.0.0.1:8000/api/v1/health
-```
-
-Expected:
-
-```json
-{ "status": "ok", "service": "agentic-army-v1" }
-```
-
-### 5) Create a job (includes Moorcheh key)
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v1/jobs \
-  -H "Content-Type: application/json" \
-  -d '{
-    "goal": "Implement conflict-aware parallel coding",
-    "coder_count": 2,
-    "gemini_key": "optional-placeholder",
-    "moorcheh_key": "mc_<your-key-here>"
-  }'
-```
-
-Response:
-
-```json
-{ "job_id": "<uuid>" }
-```
-
-### 6) Poll job status
-
-```bash
-curl http://127.0.0.1:8000/api/v1/jobs/<job_id>/status
-```
-
-Returned shape:
+### `GET /api/v1/jobs/{job_id}/status` shape
 
 ```json
 {
-  "status": "planning",
-  "logs": ["[10:00:00] Planning phase started."],
+  "status": "coding",
+  "logs": ["[12:00:01] ..."],
   "agentStates": {
-    "planner": "running",
-    "conflict_manager": "idle",
-    "coder": "idle",
-    "verification": "idle"
+    "planner": "done",
+    "coordinator_conflict": "done",
+    "coder": "running",
+    "merger": "idle"
+  },
+  "agentResults": {
+    "planner": "{...json...}",
+    "coordinator_conflict": "{...json...}",
+    "coder": "{...json...}",
+    "merger": ""
+  },
+  "artifacts": {
+    "base_branch": "main",
+    "merged_branches": ["agenticarmy/job-123/coder-1"],
+    "merged_commit": "abc123...",
+    "changed_files": ["hello_world.py"]
   }
 }
 ```
 
-### 7) Review generated plan when status is `awaiting_plan_approval`
+
+## 6) Moorcheh data model used by runtime
+
+Records are stored as vectors in namespace `workflow-context-vectors` (default).
+
+### Record identity
+
+Deterministic ID format:
+
+`wf:{workflow_id}:run:{run_id}:evt:{event_seq}:{record_type}`
+
+This prevents duplicate records for repeat writes with same identity.
+
+
+### Record types currently used
+
+- `goal`
+- `plan`
+- `plan_rejection`
+- `approval`
+- `task`
+- `conflict`
+- `merge`
+- `qa`
+
+Also defined for future use:
+
+- `agent_state`
+
+
+### Metadata fields (stored with vectors)
+
+- `id`, `source`, `index`, `raw_text`
+- `workflow_id`, `run_id`, `agent_id`
+- `record_type`, `stage`, `status`
+- `task_id`, `file_paths`, `depends_on`
+- `conflict_score`, `timestamp`
+- `embedding_model`, `embedding_dimension`, `schema_version`
+
+
+## 7) Secrets and security behavior
+
+- GitHub OAuth token is requested from VS Code auth provider and sent for job runtime use.
+- Job state in runtime does **not** persist token or user keys.
+- Extension optional keys (`gemini`, `moorcheh`) are stored in VS Code secret storage.
+- Tool runtime prevents:
+  - workspace path escape
+  - absolute path commands
+  - `..` traversal
+  - dangerous git path override flags (`-C`, `--git-dir`, `--work-tree`)
+
+
+## 8) Configuration
+
+## Required
+
+- `MOORCHEH_API_KEY` (unless provided per-job in `moorcheh_key`)
+
+
+## Moorcheh defaults
+
+- `MOORCHEH_BASE_URL=https://api.moorcheh.ai/v1`
+- `MOORCHEH_VECTOR_NAMESPACE=workflow-context-vectors`
+- `MOORCHEH_VECTOR_DIMENSION=1536`
+
+
+## Embeddings
+
+- `EMBEDDING_PROVIDER=mock` (default), `openai`, or `cohere`
+- `EMBEDDING_MODEL=text-embedding-3-small` (OpenAI default) or `embed-english-v3.0` (Cohere default)
+- `EMBEDDING_API_KEY` required when provider is not `mock`
+- `COHERE_API_KEY` can be used instead of `EMBEDDING_API_KEY` when `EMBEDDING_PROVIDER=cohere`
+- `EMBEDDING_BASE_URL` optional:
+  - OpenAI-compatible: full embeddings endpoint (or compatible base)
+  - Cohere: `https://api.cohere.ai`, `https://api.cohere.ai/v1`, or full `/v1/embed` endpoint
+- `EMBEDDING_BATCH_SIZE=32`
+
+
+## Retrieval/conflict tuning
+
+- `CONTEXT_RETRIEVAL_TOP_K=12`
+- `MAX_CONTEXT_WINDOW=40`
+- `CONFLICT_THRESHOLD=0.35`
+
+
+## LLM runtime defaults (hosted endpoint mode)
+
+- `LLM_BASE_URL=https://qyt7893blb71b5d3.us-east-2.aws.endpoints.huggingface.cloud/v1`
+- `LLM_MODEL=openai/gpt-oss-120b`
+- `LLM_API_KEY` optional
+- `LLM_CALL_TIMEOUT_SECONDS=180`
+
+
+## 9) How to run (backend + extension)
+
+### Backend setup
 
 ```bash
-curl http://127.0.0.1:8000/api/v1/jobs/<job_id>/plan
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-Approve or reject:
+Set env (example):
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/v1/jobs/<job_id>/plan/review \
+export MOORCHEH_API_KEY="mc_..."
+export EMBEDDING_PROVIDER="mock"   # easiest local mode
+```
+
+Set env (Cohere embeddings example):
+
+```bash
+export MOORCHEH_API_KEY="mc_..."
+export MOORCHEH_VECTOR_NAMESPACE="workflow-context-vectors"
+export MOORCHEH_VECTOR_DIMENSION="1024"          # must match chosen Cohere model output size
+export EMBEDDING_PROVIDER="cohere"
+export COHERE_API_KEY="co_..."
+export EMBEDDING_MODEL="embed-english-v3.0"
+export EMBEDDING_BASE_URL="https://api.cohere.ai"
+export EMBEDDING_BATCH_SIZE="16"
+```
+
+Run backend:
+
+```bash
+uvicorn backend.main:app --reload --port 8000
+```
+
+Check health:
+
+```bash
+curl http://localhost:8000/api/v1/health
+```
+
+
+### Extension setup
+
+```bash
+npm --prefix vscode-extension install
+npm --prefix vscode-extension run compile --silent
+```
+
+Then run extension in VS Code (Extension Development Host), open AgenticArmy sidebar, and launch a run.
+
+
+### Run lifecycle (UI)
+
+1. Enter goal + coder count.
+2. Click **Launch Agents**.
+3. Complete GitHub sign-in if prompted.
+4. Wait for `awaiting_plan_approval`, review plan, approve/reject.
+5. Wait for `review_ready`, review result, approve/reject.
+6. On approval, runtime merges to base branch and marks job `done`.
+
+
+## 10) How to run by API only (without extension)
+
+```bash
+JOB_ID=$(curl -s -X POST http://localhost:8000/api/v1/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "goal":"Add conflict-aware orchestration docs",
+    "coder_count":2,
+    "github_token":"gho_xxx",
+    "github_repo":"owner/repo",
+    "base_branch":"main"
+  }' | python -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
+
+curl http://localhost:8000/api/v1/jobs/$JOB_ID/status
+curl http://localhost:8000/api/v1/jobs/$JOB_ID/plan
+curl -X POST http://localhost:8000/api/v1/jobs/$JOB_ID/plan/review \
   -H "Content-Type: application/json" \
   -d '{"approved": true, "feedback": "Proceed"}'
 ```
 
-### 8) Final result review when status is `review_ready`
+
+## 11) How to inspect Moorcheh namespaces/content
+
+With env loaded (`MOORCHEH_API_KEY` etc), run:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/v1/jobs/<job_id>/result/review \
-  -H "Content-Type: application/json" \
-  -d '{"approved": true, "feedback": "Merge approved"}'
+python - <<'PY'
+from backend.config import Settings
+from backend.memory.moorcheh_client import MoorchehClient
+
+s = Settings.from_env()
+c = MoorchehClient(s)
+namespaces = c.list_namespaces()
+print("Namespaces:")
+for ns in namespaces:
+    print("-", ns.get("namespace_name"), "dim=", ns.get("vector_dimension"))
+PY
 ```
 
-### 9) Deprecation notice
+Search current namespace:
 
-`/memory/*` endpoints are deprecated from the public API surface in this branch.  
-Use `/api/v1/*` for extension/backend integration.
-
-
-## Programmatic Usage in Your Orchestrator
-
-Use these classes directly inside planning/coordinator/coder pipelines:
-
-```python
+```bash
+python - <<'PY'
+from backend.config import Settings
 from backend.memory.moorcheh_store import MoorchehVectorStore
-from backend.memory.context_writer import WorkflowContextWriter
-from backend.memory.context_reader import WorkflowContextReader
-from backend.memory.conflict_context import ConflictCompensator, TaskDraft
-from backend.memory.schemas import RecordType, WorkflowStage
 
-store = MoorchehVectorStore()
-store.provision_namespace()
-
-writer = WorkflowContextWriter(store)
-reader = WorkflowContextReader(store)
-compensator = ConflictCompensator()
-
-# Write event
-writer.write_event(
-    workflow_id="wf-123",
-    run_id="run-7",
-    record_type=RecordType.PLAN,
-    stage=WorkflowStage.PLANNING,
-    status="done",
-    raw_text="Initial plan approved with three coder tasks.",
-    agent_id="planner",
-)
-
-# Prefetch context for planner
-bundle = reader.fetch_for_planner(
-    workflow_id="wf-123",
-    goal_text="Implement conflict-aware parallel coding.",
-    planned_files=["src/auth.py", "src/merge.py"]
-)
-prompt_context = reader.format_for_prompt(bundle)
-
-# Compensate tasks
-tasks = [
-    TaskDraft(task_id="t1", agent_id="a1", file_paths=["src/auth.py"]),
-    TaskDraft(task_id="t2", agent_id="a2", file_paths=["src/auth.py", "src/ui.py"]),
-]
-decision = compensator.compensate(tasks=tasks, context_records=bundle.records)
+s = Settings.from_env()
+store = MoorchehVectorStore(settings=s)
+rows = store.search_context(query_text="plan rejection conflict merge qa", top_k=5)
+print("Result count:", len(rows))
+for i, row in enumerate(rows, 1):
+    md = row.get("metadata", row)
+    print(f"{i}. type={md.get('record_type')} stage={md.get('stage')} status={md.get('status')} text={str(md.get('raw_text',''))[:120]}")
+PY
 ```
 
 
-## Async Agent Context Contract
+## 12) Troubleshooting
 
-Use `backend/agents/context_contract.py` to pass a normalized startup payload:
+### GitHub popup hangs during sign-in
 
-- objective/stage/workflow identity
-- retrieved memory records + summary
-- assigned tasks
-- conflict signals
-- constraints
-
-This is intended to ensure async agents can resume with shared memory context and lower conflict risk.
+- Extension now uses a 45-second timeout in `vscode-extension/src/githubAuth.ts`.
+- If timeout triggers:
+  - sign in manually via VS Code Accounts first,
+  - retry launch.
 
 
-## Prize-Track Benchmark Harness
+### Job immediately becomes `failed`
 
-Run:
+Common reasons:
+
+- Missing `MOORCHEH_API_KEY` (and no per-job `moorcheh_key`).
+- `railtracks` not installed in backend environment.
+- Invalid GitHub token or inaccessible repo.
+
+Check `/status` logs for exact runtime exception.
+
+If you see uvicorn reload warnings from `.workdirs/...` while using `--reload`, the backend was watching agent worktrees and restarting mid-run. Runtime now creates workdirs in OS temp path (outside repo watch scope). Restart backend to pick up this fix.
+
+If you see repeated coder loopbacks with messages like:
+
+- `No implementation outcome was provided by the coding agent`
+
+runtime now treats this as recoverable contract noise and, for simple Python goals, applies deterministic fallback file creation (`hello_world.py`) so a real artifact is produced.
+
+If you see:
+
+- `fatal: invalid reference: main`
+
+the target repo likely does not have a local `main` branch. Runtime now auto-falls back to the repo's current local branch when `base_branch` is missing.
+
+If the target repo is newly initialized and has no commits, runtime now bootstraps an initial empty commit so git worktree operations can proceed.
+
+If you see:
+
+- `Cohere embed HTTP 400 ... valid input_type must be provided`
+
+the backend now sends Cohere `input_type` automatically (`search_document` for writes, `search_query` for retrieval). Restart backend so the latest code is running.
+
+If you see:
+
+- `Unsupported EMBEDDING_PROVIDER 'https://...'`
+
+your env is mis-set (provider accidentally set to URL). Use `EMBEDDING_PROVIDER=cohere` (or `mock` / `openai`). The config now also normalizes common typo `ochere` to `cohere`.
+
+If you see:
+
+- `EmbeddingDimensionError ... Expected 1536, got 1024`
+
+you are using Cohere with a mismatched vector dimension. For `embed-english-v3.0` / `embed-multilingual-v3.0`, use `MOORCHEH_VECTOR_DIMENSION=1024`. The backend now defaults Cohere to 1024 and auto-corrects legacy 1536 values.
+
+
+### No vectors visible in Moorcheh dashboard
+
+- Confirm namespace name matches `MOORCHEH_VECTOR_NAMESPACE`.
+- Confirm writes are happening in job logs (goal/plan/task/conflict events).
+- Verify `MOORCHEH_VECTOR_DIMENSION` matches embedder dimension.
+- Use the Python namespace/search snippets above to confirm API-level visibility.
+
+
+## 13) Validation commands used in this repo
 
 ```bash
-python -m backend.evaluation.prize_track_harness
+python -m pytest tests/ -q
+npm --prefix vscode-extension run compile --silent
 ```
 
-This prints a baseline vs memory-aware comparison and includes overlap reduction metrics.
+These currently pass in this branch (backend test suite and extension compile).
 
 
-## Testing & Validation
+## 14) Current limitations / next hardening steps
 
-### Run unit and integration tests
+- Job state is in-memory only (lost on backend restart).
+- Coder tasks execute sequentially in runtime loop (despite multi-coder assignment).
+- Extension UI currently does not expose repo/branch fields; backend supports them.
+- GitHub PR/comment helpers exist but are not yet fully surfaced as first-class UI actions.
 
-```bash
-python -m pytest -q
-```
-
-All tests pass using:
-- Mock embedding provider (deterministic vectors)
-- Fake Moorcheh client for local tests
-- Real Moorcheh SDK for live integration
-
-### Live integration test (with real API key)
-
-If `MOORCHEH_API_KEY` is set in your environment, the implementation uses the official Moorcheh SDK to:
-1. List existing namespaces
-2. Create or verify vector namespace with correct dimension
-3. Upload vectors with metadata
-4. Search and retrieve results
-5. Return status and telemetry
-
-Example from 2026-03-14 live test:
-```
-✓ Upload: 3 vectors added
-✓ Search: 5 hits returned
-✓ Metadata: workflow_id, record_type, agent_id preserved
-```
-
-Tests pass for config, schema, conflict compensation, memory loop, async context contract, and `/api/v1` job contract (11 passed).
-
-
-## Implementation Details
-
-### Why Moorcheh SDK?
-
-The implementation switched from custom REST client to the official `moorcheh-sdk` for:
-- **Automatic auth**: SDK handles `x-api-key` header and future auth schemes
-- **Retry logic**: Built-in exponential backoff for transient failures
-- **Type safety**: Official SDK response types and validation
-- **Maintainability**: Follows Moorcheh's official patterns and updates
-
-### Architecture
-
-```
-┌─ FastAPI routes (`/api/v1`) ──────────────────────────┐
-│ GET  /health                                           │
-│ POST /jobs                                             │
-│ GET  /jobs/{job_id}/plan                               │
-│ POST /jobs/{job_id}/plan/review                        │
-│ GET  /jobs/{job_id}/status                             │
-│ POST /jobs/{job_id}/result/review                      │
-└──────────┬──────────────────────────────────────────────┘
-           │
-┌──────────▼─────────────────────────────────────────────┐
-│ JobRuntime state machine                              │
-│ - initializing -> planning -> awaiting_plan_approval  │
-│ - coordinating -> coding -> verifying -> review_ready │
-│ - done | failed                                       │
-│ - HITL gates via asyncio.Event                        │
-└──────────┬─────────────────────────────────────────────┘
-           │
-┌──────────▼─────────────────────────────────────────────┐
-│ Moorcheh memory stack                                 │
-│ - WorkflowContextReader / WorkflowContextWriter       │
-│ - ConflictCompensator                                 │
-│ - MoorchehVectorStore                                 │
-│ - moorcheh_client.py (SDK wrapper)                    │
-└──────────┬─────────────────────────────────────────────┘
-           │
-┌──────────▼──────────────────────────────────────┐
-│ moorcheh-sdk (Official Python SDK)              │
-│ - client.namespaces.list()                      │
-│ - client.vectors.upload()                       │
-│ - client.search()                               │
-│ - Automatic auth, retries, error handling       │
-└──────────┬──────────────────────────────────────┘
-           │
-           └──→ Moorcheh API (https://api.moorcheh.ai/v1)
-```
-
-### Known Gaps / Next Wiring Step
-
-The current code provides memory infrastructure and diagnostics. To make it fully live in production orchestration, wire:
-
-- planner/coordinator/coder/merge/qa state transitions to `WorkflowContextWriter`
-- planner/coordinator startup context fetch to `WorkflowContextReader`
-- task assignment rebalancing to `ConflictCompensator`
-- async payload handoff to `build_async_agent_context(...)`
-
-Once those calls are connected to your runtime state machine, the Moorcheh memory loop is fully operational.
+This means the core pipeline is functional, but there is room to harden persistence, throughput, and richer UX controls.

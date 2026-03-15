@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import replace
 from typing import Any
 
 from backend.config import Settings, get_settings
 from backend.memory.embedding_provider import EmbeddingProvider, build_embedding_provider
-from backend.memory.moorcheh_client import MoorchehClient
+from backend.memory.moorcheh_client import MoorchehAPIError, MoorchehClient
 from backend.memory.schemas import ContextRecord
 from backend.memory.telemetry import MemoryTelemetry, elapsed_timer
 
@@ -30,11 +31,31 @@ class MoorchehVectorStore:
 
     def provision_namespace(self) -> dict[str, Any]:
         """Ensures the configured vector namespace exists with expected dimension."""
+        namespace = self.settings.moorcheh_vector_namespace
+        dimension = self.settings.moorcheh_vector_dimension
         try:
             result = self.client.ensure_vector_namespace(
-                namespace_name=self.settings.moorcheh_vector_namespace,
-                vector_dimension=self.settings.moorcheh_vector_dimension,
+                namespace_name=namespace,
+                vector_dimension=dimension,
             )
+            self.telemetry.record_provision()
+            return result
+        except MoorchehAPIError as exc:
+            if "mismatched vector dimension" not in str(exc).lower():
+                self.telemetry.record_error(str(exc))
+                raise
+            fallback_namespace = _dimension_namespace(namespace, dimension)
+            if fallback_namespace == namespace:
+                self.telemetry.record_error(str(exc))
+                raise
+            result = self.client.ensure_vector_namespace(
+                namespace_name=fallback_namespace,
+                vector_dimension=dimension,
+            )
+            self.settings = replace(self.settings, moorcheh_vector_namespace=fallback_namespace)
+            result["namespace_fallback_from"] = namespace
+            result["namespace_fallback_to"] = fallback_namespace
+            result["namespace_fallback_reason"] = "dimension_mismatch"
             self.telemetry.record_provision()
             return result
         except Exception as exc:
@@ -94,7 +115,9 @@ class MoorchehVectorStore:
         """Retrieves relevant context records for planning/coordinating agents."""
         try:
             with elapsed_timer() as elapsed:
-                query_embedding = self.embedder.embed([query_text])[0]
+                query_embedding = self.embedder.embed(
+                    [query_text], input_type="search_query"
+                )[0]
                 response = self.client.search_vectors(
                     namespaces=[self.settings.moorcheh_vector_namespace],
                     query_vector=query_embedding.vector,
@@ -116,7 +139,9 @@ class MoorchehVectorStore:
             raise
 
     def _build_vector_payloads(self, records: list[ContextRecord]) -> list[dict[str, Any]]:
-        embedding_payloads = self.embedder.embed([record.raw_text for record in records])
+        embedding_payloads = self.embedder.embed(
+            [record.raw_text for record in records], input_type="search_document"
+        )
         payloads: list[dict[str, Any]] = []
         for record, embedding in zip(records, embedding_payloads):
             payloads.append(
@@ -143,3 +168,10 @@ def _matches_filters(candidate: dict[str, Any], filters: dict[str, Any]) -> bool
         if actual != expected:
             return False
     return True
+
+
+def _dimension_namespace(namespace: str, dimension: int) -> str:
+    dim_suffix = f"-{dimension}"
+    if namespace.endswith(dim_suffix):
+        return namespace
+    return f"{namespace}{dim_suffix}"

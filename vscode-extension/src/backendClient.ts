@@ -3,15 +3,25 @@ import * as vscode from 'vscode';
 export interface RunConfig {
   goal: string;
   coderCount: number;
-  geminiKey: string;
-  moorchehKey: string;
+  githubToken: string;
+  githubRepo?: string;
+  baseBranch?: string;
+  geminiKey?: string;
+  moorchehKey?: string;
+  workspacePath?: string;
 }
 
 export interface JobStatus {
   status: string;
   logs: string[];
-  agentStates: Record<string, 'idle' | 'running' | 'done' | 'error'>;
-  agentResults: Record<string, string>;
+  agentStates: Record<string, string>;
+  agentResults?: Record<string, string>;
+  artifacts?: {
+    base_branch?: string;
+    merged_branches?: string[];
+    merged_commit?: string;
+    changed_files?: string[];
+  };
 }
 
 export interface PlanStatus {
@@ -34,8 +44,12 @@ export class BackendClient {
       body: JSON.stringify({
         goal: config.goal,
         coder_count: config.coderCount,
-        gemini_key: config.geminiKey,
-        moorcheh_key: config.moorchehKey,
+        gemini_key: config.geminiKey ?? '',
+        moorcheh_key: config.moorchehKey ?? '',
+        github_token: config.githubToken,
+        github_repo: config.githubRepo ?? '',
+        base_branch: config.baseBranch ?? 'main',
+        workspace_path: config.workspacePath ?? '',
       }),
     });
 
@@ -90,14 +104,24 @@ export class BackendClient {
   }
 
   async ping(): Promise<boolean> {
-    try {
-      // Use root health check or namespaced health check
-      const response = await fetch(this.baseUrl.replace('/api/v1', '/health'), {
-        signal: AbortSignal.timeout(2000),
-      });
-      return response.ok;
-    } catch {
-      return false;
+    const endpoints = [
+      `${this.baseUrl}/health`,
+      this.baseUrl.replace('/api/v1', '/health'),
+    ];
+
+    for (const endpoint of endpoints) {
+      try {
+        const response = await fetch(endpoint, {
+          signal: AbortSignal.timeout(2000),
+        });
+        if (response.ok) {
+          return true;
+        }
+      } catch {
+        // Try fallback health endpoint.
+      }
     }
+
+    return false;
   }
 }

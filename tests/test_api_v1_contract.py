@@ -1,9 +1,30 @@
 import time
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from backend.agents.railtracks_runtime import CoordinatorAssignment, CoordinatorOutput
 from backend.api.v1 import set_runtime
-from backend.core.job_runtime import JobRuntime
+from backend.core.job_runtime import (
+    JobRuntime,
+    _conflict_threshold_to_percent,
+    _detect_simple_python_target,
+    _effective_coder_branches,
+    _extract_primary_py_target,
+    _is_coder_recoverable_failure_reason,
+    _is_contract_mismatch_reason,
+    _is_no_change_reason,
+    _is_no_outcome_reason,
+    _is_syntax_error_reason,
+    _qa_failure_reason_from_command,
+    _resolve_github_repo_name,
+    _simple_python_goal_tasks,
+    _should_attempt_task_fallback,
+    _should_continue_after_coder_result,
+    _is_success_status,
+    _tasks_from_assignments,
+)
+from backend.core.workdir_runtime import WorkdirRuntimeError
 from backend.main import app
 
 
@@ -68,9 +89,9 @@ def test_full_job_lifecycle_with_reviews() -> None:
         assert isinstance(review_ready_payload["logs"], list)
         assert set(review_ready_payload["agentStates"].keys()) == {
             "planner",
-            "conflict_manager",
+            "coordinator_conflict",
             "coder",
-            "verification",
+            "merger",
         }
 
         result_review = client.post(
@@ -82,7 +103,7 @@ def test_full_job_lifecycle_with_reviews() -> None:
 
         done_payload = _wait_for_status(client, job_id, "done")
         assert done_payload["agentStates"]["planner"] == "done"
-        assert done_payload["agentStates"]["verification"] == "done"
+        assert done_payload["agentStates"]["merger"] == "done"
 
 
 def test_plan_rejection_loops_back_to_planning() -> None:
@@ -148,3 +169,333 @@ def test_result_review_rejects_wrong_state() -> None:
         )
         assert response.status_code == 409
 
+
+def test_create_job_accepts_no_user_api_keys() -> None:
+    with _create_client() as client:
+        create = client.post(
+            "/api/v1/jobs",
+            json={
+                "goal": "Run with hosted LLM endpoint and no user model key.",
+                "coder_count": 2,
+                "github_token": "gho_dummy_token",
+                "github_repo": "owner/repo",
+                "base_branch": "main",
+            },
+        )
+        assert create.status_code == 200
+        job_id = create.json()["job_id"]
+        payload = _wait_for_status(client, job_id, "awaiting_plan_approval")
+        assert payload["status"] == "awaiting_plan_approval"
+
+
+def test_create_job_rejects_invalid_workspace_path() -> None:
+    with _create_client() as client:
+        invalid_path = f"/tmp/agenticarmy-not-a-real-workspace-path-{uuid4().hex}"
+        create = client.post(
+            "/api/v1/jobs",
+            json={
+                "goal": "Run with invalid workspace path.",
+                "coder_count": 1,
+                "workspace_path": invalid_path,
+            },
+        )
+        assert create.status_code == 422
+        assert "workspace_path" in create.text
+
+
+def test_status_payload_contains_agent_results() -> None:
+    with _create_client() as client:
+        create = client.post(
+            "/api/v1/jobs",
+            json={
+                "goal": "Ensure status payload includes agent artifact output.",
+                "coder_count": 1,
+            },
+        )
+        assert create.status_code == 200
+        job_id = create.json()["job_id"]
+        payload = _wait_for_status(client, job_id, "awaiting_plan_approval")
+        assert "agentResults" in payload
+        assert set(payload["agentResults"].keys()) == {
+            "planner",
+            "coordinator_conflict",
+            "coder",
+            "merger",
+        }
+        assert "artifacts" in payload
+        assert payload["artifacts"]["base_branch"] == "main"
+        assert payload["artifacts"]["merged_branches"] == []
+        assert payload["artifacts"]["merged_commit"] == ""
+        assert payload["artifacts"]["changed_files"] == []
+
+
+def test_unknown_job_status_returns_failed_payload_for_polling() -> None:
+    with _create_client() as client:
+        response = client.get("/api/v1/jobs/does-not-exist/status")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "failed"
+        assert "backend restarted" in payload["logs"][0].lower()
+        assert set(payload["agentStates"].keys()) == {
+            "planner",
+            "coordinator_conflict",
+            "coder",
+            "merger",
+        }
+        assert payload["artifacts"]["merged_branches"] == []
+        assert payload["artifacts"]["merged_commit"] == ""
+        assert payload["artifacts"]["changed_files"] == []
+
+
+def test_success_status_aliases_are_accepted() -> None:
+    assert _is_success_status("completed")
+    assert _is_success_status("success")
+    assert _is_success_status("ok")
+    assert _is_success_status("done")
+    assert not _is_success_status("failed")
+
+
+def test_contract_mismatch_reason_detection_supports_multiple_phrasings() -> None:
+    assert _is_contract_mismatch_reason(
+        "Assistant response did not conform to the required output contract."
+    )
+    assert _is_contract_mismatch_reason(
+        "The assistant's response does not conform to the required output contract; required fields are missing or malformed."
+    )
+    assert _is_contract_mismatch_reason(
+        "Assistant response did not follow the required output contract; returned an unrelated JSON with rel_path."
+    )
+    assert not _is_contract_mismatch_reason("Transient network timeout")
+
+
+def test_no_change_reason_is_recoverable() -> None:
+    reason = "No implementation or file changes were provided for the assigned task."
+    assert _is_no_change_reason(reason)
+    assert _is_coder_recoverable_failure_reason(reason)
+
+
+def test_no_outcome_reason_is_recoverable() -> None:
+    reason = "No implementation outcome was provided by the coding agent."
+    assert _is_no_outcome_reason(reason)
+    assert _is_coder_recoverable_failure_reason(reason)
+
+
+def test_no_outcome_reason_catches_no_coding_actions_phrasing() -> None:
+    assert _is_no_outcome_reason("No coding actions were performed; implementation outcome is missing.")
+    assert _is_no_outcome_reason("No coding was performed for the assigned task.")
+    assert _is_no_outcome_reason("Implementation outcome is missing from the agent response.")
+    assert _is_no_outcome_reason("No files were created during execution.")
+    assert _is_no_outcome_reason("No files were written to the workspace.")
+    assert _is_no_outcome_reason("No changes were made to any files.")
+    assert not _is_no_outcome_reason("Transient network error occurred.")
+
+
+def test_syntax_error_reason_is_recoverable() -> None:
+    reason = "Generated code contains syntax errors (mismatched brackets in state assignments)."
+    assert _is_syntax_error_reason(reason)
+    assert _is_coder_recoverable_failure_reason(reason)
+
+
+def test_conflict_threshold_to_percent_uses_settings_scale_and_clamps() -> None:
+    assert _conflict_threshold_to_percent(0.35) == 35
+    assert _conflict_threshold_to_percent(0.0) == 0
+    assert _conflict_threshold_to_percent(1.0) == 100
+    assert _conflict_threshold_to_percent(-0.3) == 0
+    assert _conflict_threshold_to_percent(1.7) == 100
+
+
+def test_effective_coder_branches_reuses_history_when_round_has_no_new_commits() -> None:
+    assert _effective_coder_branches(current_round=["agentic/1/coder-1"], historical=[]) == [
+        "agentic/1/coder-1"
+    ]
+    assert _effective_coder_branches(
+        current_round=[],
+        historical=["agentic/1/coder-1", "agentic/1/coder-1"],
+    ) == ["agentic/1/coder-1"]
+
+
+def test_extract_primary_py_target_returns_first_py_file() -> None:
+    tasks = _simple_python_goal_tasks("calc.py")
+    assert _extract_primary_py_target(tasks, "build a calc") == "calc.py"
+
+
+def test_extract_primary_py_target_skips_init_py() -> None:
+    from backend.memory.conflict_context import TaskDraft
+    tasks = [
+        TaskDraft(task_id="t1", agent_id="coder-1", file_paths=["src/converter/__init__.py", "src/converter/base.py"]),
+        TaskDraft(task_id="t2", agent_id="coder-1", file_paths=["src/converter/weight.py"]),
+    ]
+    assert _extract_primary_py_target(tasks, "build a converter") == "src/converter/base.py"
+
+
+def test_extract_primary_py_target_uses_init_as_last_resort() -> None:
+    from backend.memory.conflict_context import TaskDraft
+    tasks = [TaskDraft(task_id="t1", agent_id="coder-1", file_paths=["src/__init__.py"])]
+    assert _extract_primary_py_target(tasks, "build a python app") == "src/__init__.py"
+
+
+def test_extract_primary_py_target_falls_back_to_main_for_python_goal() -> None:
+    from backend.memory.conflict_context import TaskDraft
+    tasks = [TaskDraft(task_id="t1", agent_id="coder-1", file_paths=["README.md", "docs/spec.md"])]
+    assert _extract_primary_py_target(tasks, "build a python app") == "main.py"
+    assert _extract_primary_py_target(tasks, "build an app") is None
+
+
+def test_detect_simple_python_target_matches_calc_keyword() -> None:
+    assert _detect_simple_python_target("build a python calc program") == "calc.py"
+    assert _detect_simple_python_target("create a python terminal calc") == "calc.py"
+
+
+def test_detect_simple_python_target_prefers_explicit_file_then_hello_world_default() -> None:
+    assert _detect_simple_python_target("Create hello world in python at scripts/greeter.py") == "scripts/greeter.py"
+    assert _detect_simple_python_target("Make hello world in python") == "hello_world.py"
+    assert _detect_simple_python_target("Create a python script at scripts/greeter.py") is None
+    assert _detect_simple_python_target("Write hello world in javascript") is None
+
+
+def test_detect_simple_python_target_matches_calculator_and_other_goals() -> None:
+    assert _detect_simple_python_target("Create a python terminal based calculator") == "calculator.py"
+    assert _detect_simple_python_target("Build a Python calculator at calc.py") == "calc.py"
+    assert _detect_simple_python_target("Make a python guessing game") == "guessing_game.py"
+    assert _detect_simple_python_target("Write a python command-line todo list") == "todo_list.py"
+    assert _detect_simple_python_target("Write a python terminal-based script") == "main.py"
+    assert _detect_simple_python_target("Build a web app with flask") is None
+
+
+def test_simple_python_goal_tasks_targets_single_file() -> None:
+    tasks = _simple_python_goal_tasks("hello_world.py")
+    assert len(tasks) == 1
+    assert tasks[0].file_paths == ["hello_world.py"]
+    assert tasks[0].agent_id == "coder-1"
+
+
+def test_tasks_from_assignments_infers_concrete_files_for_python_goal() -> None:
+    coordinator = CoordinatorOutput(
+        assignments=[
+            CoordinatorAssignment(
+                task_id="task-01",
+                task_summary="Initialize package, add README, and define dependencies",
+                assigned_agent_id="coder-1",
+                rationale="Set up snake game project scaffold.",
+            ),
+            CoordinatorAssignment(
+                task_id="task-02",
+                task_summary="Implement game loop and command line entrypoint",
+                assigned_agent_id="coder-1",
+                rationale="Provide playable snake game loop and CLI.",
+            ),
+        ]
+    )
+    tasks = _tasks_from_assignments(
+        coordinator,
+        coder_count=1,
+        goal="Build a snake game in Python",
+    )
+    flattened = [path for task in tasks for path in task.file_paths]
+    assert "README.md" in flattened
+    assert "requirements.txt" in flattened
+    assert any(path.startswith("snake_game/") for path in flattened)
+    assert all(not path.startswith("workspace/task_") for path in flattened)
+
+
+def test_tasks_from_assignments_ignores_placeholder_predicted_files() -> None:
+    coordinator = CoordinatorOutput(
+        assignments=[
+            CoordinatorAssignment(
+                task_id="task-01",
+                task_summary="Update docs",
+                assigned_agent_id="coder-1",
+                predicted_files=["workspace/task_1.txt", "README.md"],
+            )
+        ]
+    )
+    tasks = _tasks_from_assignments(
+        coordinator,
+        coder_count=1,
+        goal="Update README documentation",
+    )
+    assert tasks[0].file_paths == ["README.md"]
+
+
+def test_resolve_github_repo_name_prefers_explicit_repo() -> None:
+    class _Workdirs:
+        def detect_repo_full_name(self) -> str:
+            raise AssertionError("should not be called when explicit repo is provided")
+
+    assert _resolve_github_repo_name("owner/explicit", _Workdirs()) == "owner/explicit"
+
+
+def test_resolve_github_repo_name_uses_detected_remote() -> None:
+    class _Workdirs:
+        def detect_repo_full_name(self) -> str:
+            return "owner/from-remote"
+
+    assert _resolve_github_repo_name("", _Workdirs()) == "owner/from-remote"
+
+
+def test_resolve_github_repo_name_returns_empty_when_remote_missing() -> None:
+    class _Workdirs:
+        def detect_repo_full_name(self) -> str:
+            raise WorkdirRuntimeError("remote.origin.url is not configured.")
+
+    assert _resolve_github_repo_name("", _Workdirs()) == ""
+
+
+def test_qa_failure_reason_from_command_prefers_last_line() -> None:
+    detail = _qa_failure_reason_from_command(
+        {"exit_code": 1, "stdout": "", "stderr": "line one\nline two\nAssertionError: x"}
+    )
+    assert "pytest failed (exit 1)" in detail
+    assert "AssertionError: x" in detail
+
+
+def test_should_continue_after_coder_result_when_committed_changes_exist() -> None:
+    assert _should_continue_after_coder_result(
+        status="failed",
+        reason="Generated code contains syntax errors",
+        committed=True,
+    )
+    assert not _should_continue_after_coder_result(
+        status="failed",
+        reason="Tool execution failed with exit code 2",
+        committed=False,
+    )
+
+
+def test_should_attempt_task_fallback_never_fires_on_success_status() -> None:
+    # Coder claims success but writes nothing → no stub, let the pipeline retry.
+    for success_status in ("completed", "success", "ok", "done"):
+        assert not _should_attempt_task_fallback(
+            status=success_status,
+            reason="",
+            task_files=["src/main.py", "src/utils.py"],
+        ), f"fallback should NOT fire for status={success_status!r}"
+
+
+def test_should_attempt_task_fallback_fires_on_recoverable_failure() -> None:
+    assert _should_attempt_task_fallback(
+        status="failed",
+        reason="no files were created or modified",
+        task_files=["src/main.py"],
+    )
+    assert _should_attempt_task_fallback(
+        status="error",
+        reason="output contract mismatch",
+        task_files=["src/app.py"],
+    )
+
+
+def test_should_attempt_task_fallback_does_not_fire_on_unrecoverable_failure() -> None:
+    assert not _should_attempt_task_fallback(
+        status="failed",
+        reason="Tool execution failed with exit code 2",
+        task_files=["src/main.py"],
+    )
+
+
+def test_should_attempt_task_fallback_does_not_fire_when_no_valid_files() -> None:
+    assert not _should_attempt_task_fallback(
+        status="failed",
+        reason="no files were written",
+        task_files=[],
+    )

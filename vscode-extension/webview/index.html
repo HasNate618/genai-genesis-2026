@@ -41,11 +41,11 @@
   ═══════════════════════════════════════════════════════════════ -->
   <section id="panel-settings" class="panel active">
 
-    <div class="section-title">API Keys</div>
+    <div class="section-title">Optional Keys (Legacy)</div>
 
     <!-- Gemini row -->
     <div class="field-row mb-8">
-      <div class="field-label"><span class="req">*</span>&nbsp;Gemini</div>
+      <div class="field-label">Gemini</div>
       <div class="field-input-wrap">
         <input type="password" id="gemini-key" placeholder="AIza..." autocomplete="off" spellcheck="false" />
         <button class="btn-icon" id="toggle-gemini" title="Show">👁</button>
@@ -76,6 +76,11 @@
       <button class="btn btn-primary btn-full" id="save-keys-btn">Save Keys</button>
     </div>
 
+    <div class="info-box mt-8">
+      GitHub account auth is requested automatically when you launch a run.
+      Model API keys are not required for hosted endpoint mode.
+    </div>
+
     <!-- Saved keys section -->
     <div id="saved-keys-section" class="hidden" style="margin-top: 20px;">
       <div class="section-title">Saved Keys</div>
@@ -90,6 +95,15 @@
   <section id="panel-goal" class="panel">
 
     <div class="section-title">Define Goal</div>
+
+    <!-- Target repo row -->
+    <div class="field-row" style="align-items:center">
+      <div class="field-label">Repo</div>
+      <div style="flex:1;display:flex;align-items:center;gap:4px;min-width:0">
+        <div id="repo-path-display" class="repo-path" title="">Detecting workspace…</div>
+        <button class="btn-icon" id="browse-repo-btn" title="Browse for target repo">📁</button>
+      </div>
+    </div>
 
     <div class="field-row" style="align-items:flex-start">
       <div class="field-label" style="padding-top:6px"><span class="req">*</span>&nbsp;Goal</div>
@@ -200,21 +214,11 @@
         </div>
       </div>
 
-      <!-- Conflict Manager -->
-      <div class="agent-card" id="agent-conflict-manager" data-agent="conflict_manager">
-        <div class="agent-header" id="agent-header-conflict-manager">
-          <span class="agent-chevron" id="chevron-conflict-manager">▶</span>
-          <div class="agent-icon">🎯</div>
-          <div class="agent-info">
-            <div class="agent-name">Conflict Mgr</div>
-            <div class="agent-role">Chunks tasks & context</div>
-          </div>
-          <span class="badge badge-idle">Idle</span>
-        </div>
-        <div class="agent-result-body hidden" id="agent-result-conflict-manager">
-          <div class="agent-result-content" id="agent-result-content-conflict-manager">
-            <span class="agent-result-empty">No results yet.</span>
-          </div>
+      <div class="agent-card" id="agent-coordinator-conflict">
+        <div class="agent-icon">🎯</div>
+        <div class="agent-info">
+          <div class="agent-name">Coordinator / Conflict</div>
+          <div class="agent-role">Task split + overlap analysis</div>
         </div>
       </div>
 
@@ -236,21 +240,11 @@
         </div>
       </div>
 
-      <!-- Verification -->
-      <div class="agent-card" id="agent-verification" data-agent="verification">
-        <div class="agent-header" id="agent-header-verification">
-          <span class="agent-chevron" id="chevron-verification">▶</span>
-          <div class="agent-icon">🧪</div>
-          <div class="agent-info">
-            <div class="agent-name">Verification</div>
-            <div class="agent-role">Automated QA & Linters</div>
-          </div>
-          <span class="badge badge-idle">Idle</span>
-        </div>
-        <div class="agent-result-body hidden" id="agent-result-verification">
-          <div class="agent-result-content" id="agent-result-content-verification">
-            <span class="agent-result-empty">No results yet.</span>
-          </div>
+      <div class="agent-card" id="agent-merger">
+        <div class="agent-icon">🔀</div>
+        <div class="agent-info">
+          <div class="agent-name">Merger</div>
+          <div class="agent-role">Merge + post-merge verification</div>
         </div>
       </div>
 
@@ -281,6 +275,7 @@
 
   </section>
 
+  <script>window.__WORKSPACE_PATH__ = {{WORKSPACE_PATH}};</script>
   <script src="{{JS_URI}}"></script>
 </body>
 </html>

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -28,7 +30,11 @@ class CreateJobRequest(BaseModel):
     goal: str = Field(..., min_length=1)
     coder_count: int = Field(default=2, ge=1, le=32)
     gemini_key: str = ""
-    moorcheh_key: str = Field(..., min_length=1)
+    moorcheh_key: str = ""
+    github_token: str = ""
+    github_repo: str = ""
+    base_branch: str = Field(default="main", min_length=1)
+    workspace_path: str = ""
 
 
 class ReviewRequest(BaseModel):
@@ -43,11 +49,24 @@ async def health() -> dict[str, str]:
 
 @router.post("/jobs")
 async def create_job(payload: CreateJobRequest) -> dict[str, str]:
+    goal = payload.goal.strip()
+    if not goal:
+        raise HTTPException(status_code=422, detail="goal must not be blank.")
+    base_branch = payload.base_branch.strip() or "main"
+    workspace_path = payload.workspace_path.strip()
+    if workspace_path:
+        workspace_dir = Path(workspace_path).expanduser()
+        if not workspace_dir.exists() or not workspace_dir.is_dir():
+            raise HTTPException(status_code=422, detail="workspace_path must be an existing directory.")
     launch = JobLaunchRequest(
-        goal=payload.goal,
+        goal=goal,
         coder_count=payload.coder_count,
-        gemini_key=payload.gemini_key,
-        moorcheh_key=payload.moorcheh_key,
+        gemini_key=payload.gemini_key.strip(),
+        moorcheh_key=payload.moorcheh_key.strip(),
+        github_token=payload.github_token.strip(),
+        github_repo=payload.github_repo.strip(),
+        base_branch=base_branch,
+        workspace_path=workspace_path,
     )
     job_id = await _runtime.create_job(launch)
     _runtime.start_pipeline(job_id, launch)
@@ -77,8 +96,33 @@ async def review_plan(job_id: str, payload: ReviewRequest) -> dict[str, bool]:
 async def get_status(job_id: str) -> dict:
     try:
         return await _runtime.get_status_payload(job_id)
-    except JobNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except JobNotFoundError:
+        # Graceful fallback for extension polling after backend restart.
+        return {
+            "status": "failed",
+            "logs": [
+                "Job not found in runtime memory. "
+                "This usually means the backend restarted; launch a new job."
+            ],
+            "agentStates": {
+                "planner": "failed",
+                "coordinator_conflict": "failed",
+                "coder": "failed",
+                "merger": "failed",
+            },
+            "agentResults": {
+                "planner": "",
+                "coordinator_conflict": "",
+                "coder": "",
+                "merger": "",
+            },
+            "artifacts": {
+                "base_branch": "main",
+                "merged_branches": [],
+                "merged_commit": "",
+                "changed_files": [],
+            },
+        }
 
 
 @router.post("/jobs/{job_id}/result/review")
@@ -90,4 +134,3 @@ async def review_result(job_id: str, payload: ReviewRequest) -> dict[str, bool]:
     except InvalidJobStateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True}
-

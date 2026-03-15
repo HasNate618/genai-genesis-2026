@@ -3,9 +3,10 @@ from typing import Any
 from backend.config import Settings
 from backend.memory.context_reader import WorkflowContextReader
 from backend.memory.context_writer import WorkflowContextWriter
-from backend.memory.embedding_provider import MockEmbeddingProvider
+from backend.memory.embedding_provider import EmbeddingPayload, MockEmbeddingProvider
+from backend.memory.moorcheh_client import MoorchehAPIError
 from backend.memory.moorcheh_store import MoorchehVectorStore
-from backend.memory.schemas import RecordType, WorkflowStage
+from backend.memory.schemas import ContextRecord, RecordType, WorkflowStage
 
 
 class FakeMoorchehClient:
@@ -109,3 +110,86 @@ def test_write_then_read_planner_context_loop() -> None:
     assert "Retrieved workflow context" in prompt
     assert "src/auth.py" in prompt
 
+
+def test_store_uses_search_document_and_search_query_input_types() -> None:
+    class CaptureEmbedder:
+        model_name = "capture"
+        dimension = 8
+
+        def __init__(self) -> None:
+            self.calls: list[str | None] = []
+
+        def embed(self, texts: list[str], *, input_type: str | None = None) -> list[EmbeddingPayload]:
+            self.calls.append(input_type)
+            return [
+                EmbeddingPayload(
+                    text=text,
+                    vector=[0.1] * self.dimension,
+                    model=self.model_name,
+                    dimension=self.dimension,
+                )
+                for text in texts
+            ]
+
+    settings = _settings()
+    fake_client = FakeMoorchehClient()
+    embedder = CaptureEmbedder()
+    store = MoorchehVectorStore(settings=settings, client=fake_client, embedder=embedder)
+
+    store.write_record(
+        ContextRecord(
+            workflow_id="wf-1",
+            run_id="run-1",
+            event_seq=0,
+            record_type=RecordType.PLAN,
+            stage=WorkflowStage.PLANNING,
+            status="done",
+            raw_text="Plan text",
+        )
+    )
+    store.search_context(query_text="Where did auth conflicts happen?")
+
+    assert embedder.calls == ["search_document", "search_query"]
+
+
+def test_provision_namespace_falls_back_on_dimension_mismatch() -> None:
+    class MismatchClient(FakeMoorchehClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[str] = []
+
+        def ensure_vector_namespace(self, *, namespace_name: str, vector_dimension: int) -> dict[str, Any]:
+            self.calls.append(namespace_name)
+            if namespace_name == "workflow-context-vectors":
+                raise MoorchehAPIError(
+                    "Namespace exists with mismatched vector dimension. Expected 1024, got 1536."
+                )
+            return {
+                "status": "created",
+                "namespace_name": namespace_name,
+                "vector_dimension": vector_dimension,
+            }
+
+    settings = Settings(
+        moorcheh_api_key="fake",
+        moorcheh_base_url="https://api.moorcheh.ai/v1",
+        moorcheh_vector_namespace="workflow-context-vectors",
+        moorcheh_vector_dimension=1024,
+        embedding_provider="cohere",
+        embedding_model="embed-english-v3.0",
+        embedding_api_key="cohere-key",
+        embedding_base_url="https://api.cohere.ai",
+        embedding_batch_size=8,
+        retrieval_top_k=12,
+        conflict_threshold=0.35,
+        max_context_window=20,
+    )
+    client = MismatchClient()
+    embedder = MockEmbeddingProvider(model_name="mock-model", dimension=1024, batch_size=8)
+    store = MoorchehVectorStore(settings=settings, client=client, embedder=embedder)
+
+    result = store.provision_namespace()
+
+    assert client.calls == ["workflow-context-vectors", "workflow-context-vectors-1024"]
+    assert store.settings.moorcheh_vector_namespace == "workflow-context-vectors-1024"
+    assert result["namespace_fallback_reason"] == "dimension_mismatch"
