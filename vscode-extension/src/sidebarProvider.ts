@@ -251,15 +251,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     );
 
     const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-    // Escape for embedding in a JS string literal inside the HTML.
-    const escapedPath = workspacePath.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
     let html = fs.readFileSync(htmlPath, 'utf8');
     html = html
       .replace(/{{CSP_SOURCE}}/g, webview.cspSource)
       .replace(/{{CSS_URI}}/g, cssUri.toString())
       .replace(/{{JS_URI}}/g, jsUri.toString())
-      .replace(/{{WORKSPACE_PATH}}/g, escapedPath);
+      .replace(/{{WORKSPACE_PATH}}/g, JSON.stringify(workspacePath));
     return html;
   }
 }
