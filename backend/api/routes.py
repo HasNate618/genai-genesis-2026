@@ -1047,7 +1047,7 @@ async def _run_qa_agent(
         "failed_commands": _string_list(failure_report.get("failed_commands")),
     }
     normalized["next_action"] = result.get("next_action") or (
-        "await_user_approval" if qa_passed else "rerun_user_agents"
+        "await_user_acceptance" if qa_passed else "rerun_user_agents"
     )
     normalized["next_action_reason"] = result.get("next_action_reason") or (
         "QA checks passed."
