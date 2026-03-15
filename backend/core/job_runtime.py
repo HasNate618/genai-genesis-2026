@@ -457,7 +457,23 @@ class JobRuntime:
                             }
                         )
 
-                        if coder_out.status != "completed":
+                        coder_status = str(coder_out.status).strip().lower()
+                        if (
+                            not _is_success_status(coder_status)
+                            and _is_contract_mismatch_reason(str(coder_out.next_action_reason))
+                        ):
+                            coder_out.status = "completed"
+                            if not coder_out.changed_files:
+                                coder_out.changed_files = list(task.file_paths)
+                            if not coder_out.patch_summary:
+                                coder_out.patch_summary = f"Completed {task.task_id}"
+                            await self._append_log(
+                                job_id,
+                                f"Normalized non-conforming coder contract output for {task.task_id}.",
+                            )
+                            coder_status = "completed"
+
+                        if not _is_success_status(coder_status):
                             coding_failed = True
                             loop_source = "manual_retry"
                             loop_reason = coder_out.next_action_reason or f"{task.task_id} failed"
@@ -905,6 +921,30 @@ def _unique_non_empty(values: list[str]) -> list[str]:
         seen.add(item)
         ordered.append(item)
     return ordered
+
+
+def _is_success_status(value: str) -> bool:
+    return value in {"completed", "success", "ok", "done"}
+
+
+def _is_contract_mismatch_reason(reason: str) -> bool:
+    normalized = reason.strip().lower()
+    if not normalized:
+        return False
+    if "output contract" in normalized:
+        return True
+    patterns = (
+        "did not conform to the required output contract",
+        "does not conform to the required output contract",
+        "did not follow the required output contract",
+        "returned an unrelated json",
+        "instead of the expected",
+        "rel_path",
+        "required fields are missing or malformed",
+        "missing required fields",
+        "unexpected json structure",
+    )
+    return any(pattern in normalized for pattern in patterns)
 
 
 def json_safe_dump(payload: object) -> str:

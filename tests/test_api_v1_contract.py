@@ -3,7 +3,11 @@ import time
 from fastapi.testclient import TestClient
 
 from backend.api.v1 import set_runtime
-from backend.core.job_runtime import JobRuntime
+from backend.core.job_runtime import (
+    JobRuntime,
+    _is_contract_mismatch_reason,
+    _is_success_status,
+)
 from backend.main import app
 
 
@@ -201,3 +205,24 @@ def test_unknown_job_status_returns_failed_payload_for_polling() -> None:
             "coder",
             "merger",
         }
+
+
+def test_success_status_aliases_are_accepted() -> None:
+    assert _is_success_status("completed")
+    assert _is_success_status("success")
+    assert _is_success_status("ok")
+    assert _is_success_status("done")
+    assert not _is_success_status("failed")
+
+
+def test_contract_mismatch_reason_detection_supports_multiple_phrasings() -> None:
+    assert _is_contract_mismatch_reason(
+        "Assistant response did not conform to the required output contract."
+    )
+    assert _is_contract_mismatch_reason(
+        "The assistant's response does not conform to the required output contract; required fields are missing or malformed."
+    )
+    assert _is_contract_mismatch_reason(
+        "Assistant response did not follow the required output contract; returned an unrelated JSON with rel_path."
+    )
+    assert not _is_contract_mismatch_reason("Transient network timeout")

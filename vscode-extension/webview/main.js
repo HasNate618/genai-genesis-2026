@@ -221,18 +221,18 @@ $('scroll-bottom-btn').addEventListener('click', () => {
 // ── Agent state helpers ───────────────────────────────────────────
 const AGENT_MAP = {
   planner: 'agent-planner', 
-  conflict_manager: 'agent-conflict-manager',
+  coordinator_conflict: 'agent-coordinator-conflict',
   coder: 'agent-coder', 
-  verification: 'agent-verification'
+  merger: 'agent-merger'
 };
 
 const STAGE_AGENT = {
   planning: 'planner', 
   awaiting_plan_approval: 'planner',
-  coordinating: 'conflict_manager', 
+  coordinating: 'coordinator_conflict', 
   coding: 'coder', 
-  verifying: 'verification', 
-  review_ready: 'verification'
+  verifying: 'merger', 
+  review_ready: 'merger'
 };
 
 function setAgentState(key, state) {
@@ -254,7 +254,7 @@ function applyStatus(status, planPayload) {
 
   const active = STAGE_AGENT[status.status];
   if (active) {
-    const order = ['planner', 'conflict_manager', 'coder', 'verification'];
+    const order = ['planner', 'coordinator_conflict', 'coder', 'merger'];
     const idx = order.indexOf(active);
     order.forEach((a, i) => setAgentState(a, i < idx ? 'done' : i === idx ? 'running' : 'idle'));
   }
@@ -291,7 +291,7 @@ function applyStatus(status, planPayload) {
   }
 
   if (status.status === 'done') {
-    resetAgents(); setAgentState('verification', 'done');
+    resetAgents(); setAgentState('merger', 'done');
     appendLog('✅ Pipeline complete!', 'success');
     resetLaunchButton();
   }
