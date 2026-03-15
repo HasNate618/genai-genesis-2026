@@ -448,6 +448,11 @@ def _build_conflict_report(
         "overall_conflict_score": score,
         "threshold_percent": threshold,
         "threshold_breached": breached,
+        # Contract-aligned fields
+        "is_acceptable": not breached,
+        "agent_pair_scores": [],
+        "task_hotspots": [],
+        "warnings": [],
         "next_action": "rerun_task_coordinator" if breached else "proceed_to_user_agents",
         "next_action_reason": (
             f"Conflict score {score}% exceeded threshold {threshold}%."
