@@ -64,11 +64,22 @@ function showNotification(text, type = 'success', ms = 1500) {
 
 // ── Settings ──────────────────────────────────────────────────────
 function makeToggle(btnId, inputId) {
-  $(btnId).addEventListener('click', (e) => {
-    const inp = $(inputId);
-    const isPass = inp.type === 'password';
-    inp.type = isPass ? 'text' : 'password';
-    e.currentTarget.classList.toggle('active', isPass);
+  const btn = $(btnId);
+  const inp = $(inputId);
+
+  const syncState = () => {
+    const isVisible = inp.type === 'text';
+    btn.textContent = isVisible ? '🐵' : '🙈';
+    btn.setAttribute('aria-label', isVisible ? 'Hide API key' : 'Show API key');
+    btn.setAttribute('aria-pressed', String(isVisible));
+    btn.classList.toggle('active', isVisible);
+  };
+
+  syncState();
+
+  btn.addEventListener('click', () => {
+    inp.type = inp.type === 'password' ? 'text' : 'password';
+    syncState();
   });
 }
 makeToggle('toggle-gemini', 'gemini-key');

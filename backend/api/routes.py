@@ -265,6 +265,7 @@ async def _run_pipeline(job_id: str, req: JobCreateReq):
         job["status"] = "done"
         _log(job, "🎉 Feature successfully integrated. Pipeline complete!")
 
+
     except Exception as e:
         job["status"] = "failed"
         _log(job, f"☠️ Pipeline critical error: {str(e)}")
