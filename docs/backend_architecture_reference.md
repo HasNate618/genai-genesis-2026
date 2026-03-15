@@ -111,15 +111,15 @@ Polling payload consumed by extension:
   "logs": ["[12:00:01] ..."],
   "agentStates": {
     "planner": "done",
-    "conflict_manager": "done",
+    "coordinator_conflict": "done",
     "coder": "running",
-    "verification": "idle"
+    "merger": "idle"
   },
   "agentResults": {
     "planner": "{...}",
-    "conflict_manager": "{...}",
+    "coordinator_conflict": "{...}",
     "coder": "{...}",
-    "verification": "{...}"
+    "merger": "{...}"
   }
 }
 ```

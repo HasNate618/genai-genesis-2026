@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import traceback
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -295,7 +296,7 @@ class JobRuntime:
             while True:
                 # -------------------- Coordination --------------------
                 await self._set_status(job_id, STATUS_COORDINATING)
-                await self._set_agent_states(job_id, planner="done", conflict_manager="running")
+                await self._set_agent_states(job_id, planner="done", coordinator_conflict="running")
                 await self._append_log(job_id, "Coordination phase started.")
 
                 plan_text = await self._get_plan(job_id)
@@ -310,7 +311,7 @@ class JobRuntime:
                     )
                     await self._set_agent_result(
                         job_id,
-                        "conflict_manager",
+                        "coordinator_conflict",
                         coordinator_out.model_dump_json(indent=2),
                     )
                     draft_tasks = _tasks_from_assignments(coordinator_out, request.coder_count)
@@ -381,7 +382,7 @@ class JobRuntime:
 
                 # -------------------- Coding --------------------
                 await self._set_status(job_id, STATUS_CODING)
-                await self._set_agent_states(job_id, conflict_manager="done", coder="running")
+                await self._set_agent_states(job_id, coordinator_conflict="done", coder="running")
                 await self._append_log(job_id, "Coding phase started.")
 
                 coder_outputs = []
@@ -485,6 +486,8 @@ class JobRuntime:
                     continue
 
                 verification_workspace = str(hooks.workdirs.repo_root) if hooks is not None else ""
+                await self._set_agent_states(job_id, coder="done", merger="running")
+                await self._append_log(job_id, "Merger phase started.")
 
                 # -------------------- Merge --------------------
                 merge_failed = False
@@ -546,8 +549,8 @@ class JobRuntime:
 
                 # -------------------- Verification --------------------
                 await self._set_status(job_id, STATUS_VERIFYING)
-                await self._set_agent_states(job_id, coder="done", verification="running")
-                await self._append_log(job_id, "Verification phase started.")
+                await self._set_agent_states(job_id, merger="running")
+                await self._append_log(job_id, "Post-merge verification phase started.")
 
                 if hooks is None:
                     await self._sleep_tick()
@@ -576,7 +579,7 @@ class JobRuntime:
                         f"QA status={qa_out.status} passed={qa_out.qa_passed} "
                         f"commands_failed={qa_out.summary.commands_failed}"
                     )
-                    await self._set_agent_result(job_id, "verification", qa_out.model_dump_json(indent=2))
+                    await self._set_agent_result(job_id, "merger", qa_out.model_dump_json(indent=2))
                     if qa_out.status != "success" or not qa_out.qa_passed:
                         loop_source = "qa_failure"
                         loop_reason = qa_out.next_action_reason or "QA checks failed."
@@ -588,7 +591,7 @@ class JobRuntime:
                             stage=WorkflowStage.QA,
                             status="blocked",
                             raw_text=verification_summary,
-                            agent_id="verification",
+                            agent_id="merger",
                         )
                         await self._append_log(job_id, f"QA failed. Returning to coordination: {loop_reason}")
                         continue
@@ -601,12 +604,12 @@ class JobRuntime:
                         stage=WorkflowStage.QA,
                         status="done",
                         raw_text=verification_summary,
-                        agent_id="verification",
+                        agent_id="merger",
                     )
 
                 await self._append_log(job_id, verification_summary)
                 await self._set_status(job_id, STATUS_REVIEW_READY)
-                await self._set_agent_states(job_id, verification="waiting_review")
+                await self._set_agent_states(job_id, merger="waiting_review")
                 await self._append_log(job_id, "Waiting for final result review.")
                 await self._result_events[job_id].wait()
                 self._result_events[job_id].clear()
@@ -643,9 +646,9 @@ class JobRuntime:
                     await self._set_agent_states(
                         job_id,
                         planner="done",
-                        conflict_manager="done",
+                        coordinator_conflict="done",
                         coder="done",
-                        verification="done",
+                        merger="done",
                     )
                     break
 
@@ -669,11 +672,23 @@ class JobRuntime:
             await self._set_agent_states(
                 job_id,
                 planner="failed",
-                conflict_manager="failed",
+                coordinator_conflict="failed",
                 coder="failed",
-                verification="failed",
+                merger="failed",
             )
-            await self._append_log(job_id, f"Pipeline failed: {exc}")
+            message = str(exc).strip()
+            summary = f"{exc.__class__.__name__}: {message}" if message else repr(exc)
+            await self._append_log(job_id, f"Pipeline failed: {summary}")
+
+            trace_lines = [
+                line
+                for line in "".join(
+                    traceback.format_exception(type(exc), exc, exc.__traceback__)
+                ).splitlines()
+                if line.strip()
+            ]
+            for line in trace_lines[-10:]:
+                await self._append_log(job_id, f"trace> {line}")
         finally:
             if hooks is not None:
                 await asyncio.to_thread(hooks.workdirs.cleanup_job, job_id)
@@ -781,18 +796,18 @@ class JobRuntime:
 def _default_agent_states() -> dict[str, str]:
     return {
         "planner": "idle",
-        "conflict_manager": "idle",
+        "coordinator_conflict": "idle",
         "coder": "idle",
-        "verification": "idle",
+        "merger": "idle",
     }
 
 
 def _default_agent_results() -> dict[str, str]:
     return {
         "planner": "",
-        "conflict_manager": "",
+        "coordinator_conflict": "",
         "coder": "",
-        "verification": "",
+        "merger": "",
     }
 
 

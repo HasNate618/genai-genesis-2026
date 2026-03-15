@@ -87,8 +87,27 @@ async def review_plan(job_id: str, payload: ReviewRequest) -> dict[str, bool]:
 async def get_status(job_id: str) -> dict:
     try:
         return await _runtime.get_status_payload(job_id)
-    except JobNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except JobNotFoundError:
+        # Graceful fallback for extension polling after backend restart.
+        return {
+            "status": "failed",
+            "logs": [
+                "Job not found in runtime memory. "
+                "This usually means the backend restarted; launch a new job."
+            ],
+            "agentStates": {
+                "planner": "failed",
+                "coordinator_conflict": "failed",
+                "coder": "failed",
+                "merger": "failed",
+            },
+            "agentResults": {
+                "planner": "",
+                "coordinator_conflict": "",
+                "coder": "",
+                "merger": "",
+            },
+        }
 
 
 @router.post("/jobs/{job_id}/result/review")

@@ -68,9 +68,9 @@ def test_full_job_lifecycle_with_reviews() -> None:
         assert isinstance(review_ready_payload["logs"], list)
         assert set(review_ready_payload["agentStates"].keys()) == {
             "planner",
-            "conflict_manager",
+            "coordinator_conflict",
             "coder",
-            "verification",
+            "merger",
         }
 
         result_review = client.post(
@@ -82,7 +82,7 @@ def test_full_job_lifecycle_with_reviews() -> None:
 
         done_payload = _wait_for_status(client, job_id, "done")
         assert done_payload["agentStates"]["planner"] == "done"
-        assert done_payload["agentStates"]["verification"] == "done"
+        assert done_payload["agentStates"]["merger"] == "done"
 
 
 def test_plan_rejection_loops_back_to_planning() -> None:
@@ -182,7 +182,22 @@ def test_status_payload_contains_agent_results() -> None:
         assert "agentResults" in payload
         assert set(payload["agentResults"].keys()) == {
             "planner",
-            "conflict_manager",
+            "coordinator_conflict",
             "coder",
-            "verification",
+            "merger",
+        }
+
+
+def test_unknown_job_status_returns_failed_payload_for_polling() -> None:
+    with _create_client() as client:
+        response = client.get("/api/v1/jobs/does-not-exist/status")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "failed"
+        assert "backend restarted" in payload["logs"][0].lower()
+        assert set(payload["agentStates"].keys()) == {
+            "planner",
+            "coordinator_conflict",
+            "coder",
+            "merger",
         }

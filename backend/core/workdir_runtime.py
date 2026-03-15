@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -29,7 +30,8 @@ class WorkdirRuntime:
 
     def __init__(self, *, repo_root: Path | None = None, workdir_root: Path | None = None) -> None:
         self.repo_root = repo_root or self._detect_repo_root()
-        self.workdir_root = workdir_root or (self.repo_root / ".workdirs")
+        self.workdir_root = workdir_root or self._default_workdir_root()
+        self.workdir_root.mkdir(parents=True, exist_ok=True)
         self._contexts: dict[tuple[str, str], WorkdirContext] = {}
         self._contexts_by_job: dict[str, list[WorkdirContext]] = {}
 
@@ -198,3 +200,6 @@ class WorkdirRuntime:
         compact_agent = re.sub(r"[^a-zA-Z0-9]+", "-", agent_id)[:24]
         return f"agentic/{compact_job}/{compact_agent}"
 
+    def _default_workdir_root(self) -> Path:
+        repo_slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", self.repo_root.name).strip("-") or "repo"
+        return Path(tempfile.gettempdir()) / "agenticarmy-workdirs" / repo_slug

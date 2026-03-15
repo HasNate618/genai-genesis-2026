@@ -13,7 +13,7 @@ The current system is no longer a simple mock-only skeleton. It includes:
 - Railtracks-based agent orchestration using contract files in `backend/agents/*.md`.
 - Moorcheh vector memory reads/writes across planning, coordination, coding, merge, and QA transitions.
 - Conflict compensation logic to reduce overlap before coding.
-- Isolated git workdirs (`.workdirs/<job>/<agent>`) for coder execution.
+- Isolated git workdirs in OS temp storage (`/tmp/agenticarmy-workdirs/<repo>/<job>/<agent>` on Linux) for coder execution.
 - Tool-executing coder/QA agents through allowlisted workspace tools.
 - GitHub account token flow from VS Code auth into backend runtime (ephemeral).
 - Hosted OpenAI-compatible LLM defaults via Hugging Face endpoint (no user model key required).
@@ -232,15 +232,15 @@ Notes:
   "logs": ["[12:00:01] ..."],
   "agentStates": {
     "planner": "done",
-    "conflict_manager": "done",
+    "coordinator_conflict": "done",
     "coder": "running",
-    "verification": "idle"
+    "merger": "idle"
   },
   "agentResults": {
     "planner": "{...json...}",
-    "conflict_manager": "{...json...}",
+    "coordinator_conflict": "{...json...}",
     "coder": "{...json...}",
-    "verification": ""
+    "merger": ""
   }
 }
 ```
@@ -313,10 +313,13 @@ Also defined for future use:
 
 ## Embeddings
 
-- `EMBEDDING_PROVIDER=mock` (default) or `openai`
-- `EMBEDDING_MODEL=text-embedding-3-small` (default)
+- `EMBEDDING_PROVIDER=mock` (default), `openai`, or `cohere`
+- `EMBEDDING_MODEL=text-embedding-3-small` (OpenAI default) or `embed-english-v3.0` (Cohere default)
 - `EMBEDDING_API_KEY` required when provider is not `mock`
-- `EMBEDDING_BASE_URL` optional for OpenAI-compatible endpoint
+- `COHERE_API_KEY` can be used instead of `EMBEDDING_API_KEY` when `EMBEDDING_PROVIDER=cohere`
+- `EMBEDDING_BASE_URL` optional:
+  - OpenAI-compatible: full embeddings endpoint (or compatible base)
+  - Cohere: `https://api.cohere.ai`, `https://api.cohere.ai/v1`, or full `/v1/embed` endpoint
 - `EMBEDDING_BATCH_SIZE=32`
 
 
@@ -350,6 +353,19 @@ Set env (example):
 ```bash
 export MOORCHEH_API_KEY="mc_..."
 export EMBEDDING_PROVIDER="mock"   # easiest local mode
+```
+
+Set env (Cohere embeddings example):
+
+```bash
+export MOORCHEH_API_KEY="mc_..."
+export MOORCHEH_VECTOR_NAMESPACE="workflow-context-vectors"
+export MOORCHEH_VECTOR_DIMENSION="1024"          # must match chosen Cohere model output size
+export EMBEDDING_PROVIDER="cohere"
+export COHERE_API_KEY="co_..."
+export EMBEDDING_MODEL="embed-english-v3.0"
+export EMBEDDING_BASE_URL="https://api.cohere.ai"
+export EMBEDDING_BATCH_SIZE="16"
 ```
 
 Run backend:
@@ -462,6 +478,26 @@ Common reasons:
 
 Check `/status` logs for exact runtime exception.
 
+If you see uvicorn reload warnings from `.workdirs/...` while using `--reload`, the backend was watching agent worktrees and restarting mid-run. Runtime now creates workdirs in OS temp path (outside repo watch scope). Restart backend to pick up this fix.
+
+If you see:
+
+- `Cohere embed HTTP 400 ... valid input_type must be provided`
+
+the backend now sends Cohere `input_type` automatically (`search_document` for writes, `search_query` for retrieval). Restart backend so the latest code is running.
+
+If you see:
+
+- `Unsupported EMBEDDING_PROVIDER 'https://...'`
+
+your env is mis-set (provider accidentally set to URL). Use `EMBEDDING_PROVIDER=cohere` (or `mock` / `openai`). The config now also normalizes common typo `ochere` to `cohere`.
+
+If you see:
+
+- `EmbeddingDimensionError ... Expected 1536, got 1024`
+
+you are using Cohere with a mismatched vector dimension. For `embed-english-v3.0` / `embed-multilingual-v3.0`, use `MOORCHEH_VECTOR_DIMENSION=1024`. The backend now defaults Cohere to 1024 and auto-corrects legacy 1536 values.
+
 
 ### No vectors visible in Moorcheh dashboard
 
@@ -478,7 +514,7 @@ python -m pytest tests/ -q
 npm --prefix vscode-extension run compile --silent
 ```
 
-These currently pass in this branch (`17` backend tests).
+These currently pass in this branch (backend test suite and extension compile).
 
 
 ## 14) Current limitations / next hardening steps

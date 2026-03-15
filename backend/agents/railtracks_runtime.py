@@ -378,6 +378,21 @@ class RailtracksWorkflowRuntime:
                 self.rt.call(agent, prompt),
                 timeout=self.settings.llm_call_timeout_seconds,
             )
+        except Exception as exc:
+            if not _is_structured_output_failure(exc):
+                raise
+            fallback_kwargs = {
+                "name": agent_name,
+                "llm": self.llm,
+                "system_message": system_message,
+            }
+            if tool_nodes:
+                fallback_kwargs["tool_nodes"] = tool_nodes
+            fallback_agent = self.rt.agent_node(**fallback_kwargs)
+            result = await asyncio.wait_for(
+                self.rt.call(fallback_agent, prompt),
+                timeout=self.settings.llm_call_timeout_seconds,
+            )
         except TimeoutError as exc:
             raise RailtracksRuntimeError(
                 f"Agent '{agent_name}' timed out after {self.settings.llm_call_timeout_seconds}s."
@@ -410,3 +425,15 @@ class RailtracksWorkflowRuntime:
         if not text:
             raise RailtracksRuntimeError(f"Contract file is empty: {path}")
         return text
+
+
+def _is_structured_output_failure(exc: Exception) -> bool:
+    text = str(exc).lower()
+    markers = [
+        "structured llm call failed",
+        "response_format",
+        "json_schema",
+        "tool_choice",
+        "schema validation",
+    ]
+    return any(marker in text for marker in markers)
